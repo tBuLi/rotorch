@@ -1,8 +1,8 @@
 [project]
 name = "rotorch"
 version = "0.0.1"
-dependencies = ["torch", "kingdon", "einops"]
-
+dependencies = ["torch>2.4", "kingdon", "einops"]
+#kingdon with torch backend
 [project.optional-dependencies]
 docs = ["sphinx", "furo", "myst-parser", "sphinx-design"]
 test = ["pytest"]

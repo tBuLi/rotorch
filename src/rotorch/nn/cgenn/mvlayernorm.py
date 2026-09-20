@@ -5,8 +5,7 @@ from torch.nn.parameter import UninitializedParameter
 from torch import nn
 from kingdon import MultiVector
 
-from .utils import EPS, materialize_constants, norm
-
+from .utils import EPS, full_precision, materialize_constants, norm
 
 class MVLayerNorm(LazyModuleMixin, nn.Module):
     """Divide by the norm of the input averaged over the channels, times a learned scale."""
@@ -28,7 +27,10 @@ class MVLayerNorm(LazyModuleMixin, nn.Module):
 
     def reset_parameters(self):
         nn.init.ones_(self.a)
+    def no_weight_decay(self):
+        return {"a"}
 
+    @full_precision
     def forward(self, input: MultiVector) -> MultiVector:
         input = materialize_constants(input)
         norms = einops.reduce(norm(input), "... f -> ... 1", "mean") + EPS

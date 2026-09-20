@@ -9,8 +9,7 @@ from kingdon import MultiVector
 
 from .linear import MVLinear
 from .normalization import NormalizationLayer
-from .utils import register
-
+from .utils import full_precision, register
 
 def number_of_weights_wgp(X: MultiVector, Y: MultiVector) -> int:
     i = 0
@@ -71,7 +70,7 @@ class GeometricProduct(LazyModuleMixin, nn.Module):
 
     def reset_parameters(self):
         torch.nn.init.normal_(self.weight, std=1 / math.sqrt(self.algebra.d + 1))
-
+    @full_precision
     def forward(self, input: MultiVector) -> MultiVector:
         input_right = self.linear_right(input)
         input_right = self.normalization(input_right)

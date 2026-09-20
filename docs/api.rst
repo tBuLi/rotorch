@@ -21,6 +21,12 @@ cgenn
    :imported-members:
    :show-inheritance:
 
+
+Testing
+-------
+
+.. automodule:: rotorch.testing
+   :members:
 Models
 ------
 

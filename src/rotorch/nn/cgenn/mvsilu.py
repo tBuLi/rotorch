@@ -5,8 +5,7 @@ from torch.nn.parameter import UninitializedParameter
 from torch import nn
 from kingdon import MultiVector
 
-from .utils import grade_of_blades, materialize_constants, mag2, norm
-
+from .utils import full_precision, grade_of_blades, materialize_constants, mag2, norm
 
 class MVSiLU(LazyModuleMixin, nn.Module):
     """Gate every grade by a sigmoid of an invariant of it, which the group cannot see."""
@@ -36,7 +35,10 @@ class MVSiLU(LazyModuleMixin, nn.Module):
     def reset_parameters(self):
         nn.init.ones_(self.a)
         nn.init.zeros_(self.b)
+    def no_weight_decay(self):
+        return {"a", "b"}
 
+    @full_precision
     def forward(self, input: MultiVector) -> MultiVector:
         input = materialize_constants(input)
         gates = [torch.sigmoid(self.a[i] * (input.e if g == 0 else self.invariant(input.grade(g))) + self.b[i])

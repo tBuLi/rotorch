@@ -76,7 +76,17 @@ instead, which fuses across those operators rather than stopping at each one.
 Whole model compilation works because a multivector is a pytree whose coefficients are one
 tensor and whose keys are static context, and because nothing in the path raises: the model
 traces to **one graph with no breaks**, and :code:`fullgraph=True` succeeds and reproduces
-the eager loss and gradients exactly. cgenn cannot be compiled that strictly, since it
+the the eager loss and gradients exactly. Two caveats:
+
+* Python 3.12 or later. Before that, :code:`functools.cached_property` takes a lock, which
+  :class:`~kingdon.multivector.MultiVector` uses for its shape and grades, and dynamo breaks
+  the graph at a lock.
+* Not :code:`dynamic=True`, which makes the blade keys symbolic ints and their
+  :code:`bit_count` untraceable. With the default, the second batch size compiles dynamic and
+  is the last compile; :func:`torch._dynamo.mark_dynamic` on the batch axis of the
+  coefficients makes it one. :code:`tests/test_compile.py` checks both.
+
+cgenn cannot be compiled that strictly, since it
 indexes its weights with a boolean mask, whose result has a data dependent shape; its
 :code:`--compile model` column is therefore compiled with graph breaks. The lorentz model below
 traces to one graph as well, message passing, batch norms and gathers included.

@@ -2,7 +2,7 @@ from torch import nn
 from kingdon import MultiVector
 
 from ...nn.cgenn import GeometricProduct, MVLayerNorm, MVLinear, MVSiLU
-from ...nn.cgenn.utils import cat, segment_mean
+from ...nn.cgenn.utils import cat, segment_mean, segment_plan
 
 
 class CEMLP(nn.Module):
@@ -44,18 +44,18 @@ class EGCL(nn.Module):
         input = h_i - h_j if edge_attr is None else cat([h_i - h_j, edge_attr])
         return self.edge_model(input)
 
-    def aggregate(self, h_msg, segment_ids, num_segments):
-        return segment_mean(h_msg, segment_ids, num_segments)
+    def aggregate(self, h_msg, segment_ids, num_segments, plan=None):
+        return segment_mean(h_msg, segment_ids, num_segments, plan)
 
     def update(self, h_agg, h, node_attr=None):
         input = [h, h_agg] if node_attr is None else [h, h_agg, node_attr]
         out_h = self.node_model(cat(input))
         return h + out_h if self.residual else out_h
 
-    def forward(self, h, edge_index, edge_attr=None, node_attr=None):
+    def forward(self, h, edge_index, edge_attr=None, node_attr=None, plan=None):
         rows, cols = edge_index
         h_msg = self.message(h[rows], h[cols], edge_attr)
-        h_agg = self.aggregate(h_msg, rows, num_segments=h.shape[0])
+        h_agg = self.aggregate(h_msg, rows, h.shape[0], plan)
         return self.update(h_agg, h, node_attr)
 
 
@@ -76,6 +76,7 @@ class NBodyCGGNN(nn.Module):
 
     def forward(self, h: MultiVector, edges, edge_attr=None) -> MultiVector:
         h = self.embedding(h)
+        plan = segment_plan(edges[0], h.shape[0])  # Same edges in every layer.
         for layer in self.layers:
-            h = layer(h, edges, edge_attr=edge_attr)
+            h = layer(h, edges, edge_attr=edge_attr, plan=plan)
         return self.projection(h).grade(1)

@@ -1,6 +1,9 @@
+import functools
+from typing import NamedTuple
 import einops
 import kingdon.einops_backend  # noqa: F401  Registers MultiVector with einops.
 import torch
+from torch import nn
 from kingdon import MultiVector
 
 EPS = 1e-6
@@ -12,12 +15,33 @@ def cat(mvs: list[MultiVector]) -> MultiVector:
     return packed
 
 
-def segment_mean(X: MultiVector, segment_ids: torch.Tensor, num_segments: int) -> MultiVector:
-    """Average the multivectors that share a segment id, over the axis the ids index."""
-    counts = segment_ids.new_zeros(num_segments).index_add_(0, segment_ids, torch.ones_like(segment_ids))
-    counts = einops.rearrange(counts.clamp(min=1), "segment -> segment 1")
-    return X.map(lambda v: v.new_zeros(num_segments, *v.shape[1:]).index_add_(0, segment_ids, v) / counts)
+class SegmentPlan(NamedTuple):
+    """The sort order of a set of segment ids and the length of each segment; see :func:`segment_plan`."""
+    perm: torch.Tensor
+    lengths: torch.Tensor
 
+
+def segment_plan(segment_ids: torch.Tensor, num_segments: int) -> SegmentPlan:
+    """Compute once per forward when several layers aggregate over the same edges."""
+    perm = torch.argsort(segment_ids, stable=True)  # Stable, so ties keep their order.
+    bounds = torch.arange(num_segments + 1, device=segment_ids.device)
+    lengths = torch.diff(torch.searchsorted(segment_ids[perm], bounds))
+    return SegmentPlan(perm, lengths)
+
+
+def segment_mean(X: MultiVector, segment_ids: torch.Tensor, num_segments: int,
+                 plan: SegmentPlan | None = None) -> MultiVector:
+    """
+    Average the multivectors that share a segment id, over the axis the ids index. Empty segments
+    give zero.
+
+    Sorted and reduced per segment rather than scattered with atomics, so the result is the same
+    on every run. On the CPU it matches the old index_add_ bit for bit, gradients included.
+    """
+    perm, lengths = segment_plan(segment_ids, num_segments) if plan is None else plan
+    # unsafe skips the check that the lengths add up, which on CUDA is a host sync per call.
+    return X.map(lambda v: torch.segment_reduce(v[perm], "mean", lengths=lengths, axis=0,
+                                                initial=0.0, unsafe=True))
 
 def materialize_constants(mv: MultiVector) -> MultiVector:
     """
@@ -35,8 +59,61 @@ def grade_of_blades(mv: MultiVector) -> torch.Tensor:
     can hold one parameter per grade and still apply them all in one go.
     """
     index = {g: i for i, g in enumerate(mv.grades)}
-    return torch.tensor([index[k.bit_count()] for k in mv.keys()])
+    return torch.tensor([index[k.bit_count()] for k in mv.keys()], device=device_of(mv))
 
+def device_of(mv: MultiVector) -> torch.device:
+    """Where the coefficients of `mv` live; plain numbers count as CPU."""
+    values = mv.values()
+    if isinstance(values, torch.Tensor):
+        return values.device
+    return next((v.device for v in values if isinstance(v, torch.Tensor)), torch.device("cpu"))
+
+
+def full_precision(forward):
+    """
+    Run this forward outside autocast, inputs cast to the dtype of the weights. Products and norms
+    square their inputs, which bf16 cannot afford; linear layers can stay in half precision.
+    Does nothing when autocast is off.
+    """
+    @functools.wraps(forward)
+    def wrapper(self, *args, **kwargs):
+        mvs = [a for a in args if isinstance(a, MultiVector)]
+        device_type = device_of(mvs[0]).type if mvs else "cpu"
+        if not torch.is_autocast_enabled(device_type):
+            return forward(self, *args, **kwargs)
+        dtype = next(self.parameters()).dtype
+        args = tuple(a.map(lambda v: v.to(dtype)) if isinstance(a, MultiVector) else a for a in args)
+        with torch.autocast(device_type=device_type, enabled=False):
+            return forward(self, *args, **kwargs)
+    return wrapper
+
+
+def no_weight_decay(model: nn.Module) -> set[str]:
+    """
+    Names of the parameters to spare from weight decay: everything one dimensional, plus whatever
+    a module lists in a ``no_weight_decay`` method. The cgenn gains are (grades, features), so
+    the ndim rule alone would decay them.
+    """
+    names = {name for name, p in model.named_parameters() if p.ndim <= 1}
+    for prefix, module in model.named_modules():
+        listed = module.no_weight_decay() if hasattr(module, "no_weight_decay") else ()
+        names |= {f"{prefix}.{name}" if prefix else name for name in listed}
+    return names
+
+
+def parameter_groups(model: nn.Module, weight_decay: float) -> list[dict]:
+    """
+    Decayed and spared parameters as two optimizer groups. Run a batch through the model first,
+    so the lazy layers have their parameters::
+
+        optimizer = torch.optim.AdamW(parameter_groups(model, weight_decay=0.01), lr=1e-3)
+    """
+    exempt = no_weight_decay(model)
+    params = list(model.named_parameters())
+    return [
+        {"params": [p for name, p in params if name not in exempt], "weight_decay": weight_decay},
+        {"params": [p for name, p in params if name in exempt], "weight_decay": 0.0},
+    ]
 
 def register(algebra, expr, **kwargs):
     """

@@ -11,8 +11,7 @@ from kingdon import MultiVector
 from .gp import number_of_weights_wgp, wgp
 from .linear import MVLinear
 from .normalization import NormalizationLayer
-from .utils import materialize_constants, register
-
+from .utils import full_precision, materialize_constants, register
 
 def insert_out_features(X: MultiVector) -> MultiVector:
     """Make room for the output features, so that the weights broadcast over them."""
@@ -57,7 +56,8 @@ class FullyConnectedGeometricProduct(LazyModuleMixin, nn.Module):
     def reset_parameters(self):
         std = 1 / math.sqrt(self.in_features * (self.algebra.d + 1))
         torch.nn.init.normal_(self.weight, std=std)
-
+        
+    @full_precision
     def forward(self, input: MultiVector) -> MultiVector:
         input_right = self.linear_right(input)
         input_right = self.normalization(input_right)

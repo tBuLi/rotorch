@@ -8,8 +8,7 @@ from torch.nn.parameter import UninitializedParameter
 from kingdon import MultiVector
 
 from ...nn.cgenn import FullyConnectedGeometricProduct, MVLayerNorm, MVLinear
-from ...nn.cgenn.utils import cat, grade_of_blades, invariants, materialize_constants, segment_mean
-
+from ...nn.cgenn.utils import cat, grade_of_blades, invariants, materialize_constants, segment_mean, segment_plan
 
 class Bladewise(nn.Module):
     """
@@ -107,10 +106,10 @@ class CGLayer(nn.Module):
         h_out = self.theta_h(cat([h, h_agg, invariants(x), node_attr_h]))
         return h_out, self.chi_x(x_out, h_out)
 
-    def forward(self, h, x, edges, node_attr_h, node_attr_x, edge_attr_x):
+    def forward(self, h, x, edges, node_attr_h, node_attr_x, edge_attr_x, plan=None):
         rows, cols = edges
         h_msg, x_msg = self.message(h[rows], h[cols], x[rows], x[cols], edge_attr_x)
-        h_agg, x_agg = (segment_mean(msg, rows, len(h)) for msg in (h_msg, x_msg))
+        h_agg, x_agg = (segment_mean(msg, rows, len(h), plan) for msg in (h_msg, x_msg))
         h_out, x_out = self.update(h, x, h_agg, x_agg, node_attr_h, node_attr_x)
         return (h + h_out, x + x_out) if self.residual else (h_out, x_out)
 
@@ -136,8 +135,9 @@ class LorentzCGGNN(nn.Module):
 
     def forward(self, h: MultiVector, x: MultiVector, edges, node_attr_h, node_attr_x, edge_attr_x, n_nodes) -> MultiVector:
         h, x = self.embedding_h(h), self.embedding_x(x)
+        plan = segment_plan(edges[0], len(h))  # Same edges in every layer.
         for layer in self.layers:
-            h, x = layer(h, x, edges, node_attr_h, node_attr_x, edge_attr_x)
+            h, x = layer(h, x, edges, node_attr_h, node_attr_x, edge_attr_x, plan)
 
         jets = einops.reduce(cat([h, invariants(x)]), "(jet node) feature -> jet feature", "mean", node=n_nodes)
         return self.decoder(jets)

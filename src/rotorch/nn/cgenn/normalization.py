@@ -5,8 +5,7 @@ from torch.nn.parameter import UninitializedParameter
 from torch import nn
 from kingdon import MultiVector
 
-from .utils import EPS, grade_of_blades, materialize_constants, norm
-
+from .utils import EPS, full_precision, grade_of_blades, materialize_constants, norm
 
 class NormalizationLayer(LazyModuleMixin, nn.Module):
     """Interpolate grade-wise between the input and its normalized version."""
@@ -33,6 +32,10 @@ class NormalizationLayer(LazyModuleMixin, nn.Module):
     def reset_parameters(self):
         nn.init.constant_(self.a, self.init)
 
+    def no_weight_decay(self):
+        return {"a"}
+
+    @full_precision
     def forward(self, input: MultiVector) -> MultiVector:
         input = materialize_constants(input)
         s_a = torch.sigmoid(self.a)
