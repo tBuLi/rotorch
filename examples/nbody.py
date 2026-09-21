@@ -70,8 +70,7 @@ def rotorch(args):
     from kingdon import Algebra
     from rotorch.models.cgenn import NBodyCGGNN
 
-    wrapper = torch.compile if args.compile == "operators" else None
-    algebra = Algebra(DIM, backend="torch", wrapper=wrapper)
+    algebra = Algebra(DIM, **benchmark.codegen(args))
     model = NBodyCGGNN(hidden_features=args.hidden_features, n_layers=args.num_layers).to(args.device)
 
     def loss_fn(*batch):

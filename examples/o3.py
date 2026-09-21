@@ -33,8 +33,7 @@ def rotorch(args):
     from kingdon import Algebra
     from rotorch.models.cgenn import O3CGMLP
 
-    wrapper = torch.compile if args.compile == "operators" else None
-    algebra = Algebra(DIM, backend="torch", wrapper=wrapper)
+    algebra = Algebra(DIM, **benchmark.codegen(args))
     model = O3CGMLP(DIM, args.hidden_features, num_layers=args.num_layers).to(args.device)
 
     def loss_fn(points, volumes):

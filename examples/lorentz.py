@@ -123,8 +123,7 @@ def rotorch(args):
     from kingdon import Algebra
     from rotorch.models.cgenn import LorentzCGGNN
 
-    wrapper = torch.compile if args.compile == "operators" else None
-    algebra = Algebra(1, 3, backend="torch", wrapper=wrapper)
+    algebra = Algebra(1, 3, **benchmark.codegen(args))
     model = LorentzCGGNN(features_x=args.hidden_features, n_layers=args.num_layers).to(args.device)
 
     def loss_fn(momenta, label):

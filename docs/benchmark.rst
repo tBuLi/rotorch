@@ -1,91 +1,187 @@
 Benchmark
 =========
 
-The convex hull regression of `Clifford Group Equivariant Neural Networks
-<https://github.com/DavidRuhe/clifford-group-equivariant-neural-networks>`_ (cgenn), run
-with rotorch's layers and with the original implementation. The task is to predict the volume
-of the convex hull of 16 points in :math:`\mathbb{R}^5`, so the algebra is :math:`Cl(5)`
-and the model is a linear embedding followed by four geometric product layers.
+This page lists the benchmarks of `rotorch` against `Clifford Group Equivariant Neural Networks
+<https://github.com/DavidRuhe/clifford-group-equivariant-neural-networks>`_ (cgenn).
+All the benchmarks were done on a machine with the following specs: **NVIDIA RTX A4000**
+(16 GB), AMD Ryzen Threadripper PRO 7955WX, Windows 11, torch 2.9.1 with cuda 13.0, triton 3.5
+and python 3.14.
 
-Both implementations are driven by the same script, :code:`examples/hulls.py`, so they see
-the same data, the same schedule and the same optimizer::
+A note on the different scenarios that were benchmarked:
 
-    python examples/hulls.py                       # rotorch
-    python examples/hulls.py --compile operators   # torch.compile as kingdon's operator wrapper
-    python examples/hulls.py --compile model       # torch.compile over the whole model
-    python examples/hulls.py --impl cgenn          # the original implementation
+- `cgenn`: the cgenn implementation, without any optimization.
+- `cgenn-model`: the entire cgenn implementation compiled with :func:`torch.compile`. This has graph breaks, since it
+  indexes its weights with a boolean mask, whose result has a data dependent shape.
+- `rotorch`: the rotorch example, without any optimization.
+- `rotorch-operators`: hands :func:`torch.compile` to kingdon as its wrapper, so every
+  operator kingdon generates for the algebra is compiled on its own.
+- `rotorch-operators-model`: in addition to compiling the operators like `rotorch-operators`, this compiles the
+  training step as a whole, fusing across those operators rather than stopping at each one. This results in
+  **one graph with no breaks**, and :code:`fullgraph=True` succeeds.
+- `rotorch-triton`: instead of applying :func:`torch.compile` to the kingdon optimized code, this hands kingdon a
+  code printer that directly produces a triton kernel, to which :func:`triton.jit` is applied.
+- `rotorch-triton-model`: in addition to triton kernels like `rotorch-triton`, this compiles the whole model.
 
-Timings are the median over 64 steps of forward, backward and optimizer step, after eight
-warm-up steps, and then the faster of two such runs, on an idle Apple M2 with torch 2.14 and
-python 3.12. The same matrix on a workstation, cpu and gpu side by side and weighed as well as
-timed, is under :ref:`workstation` below.
+The triton scenarios are only available on the GPU, whereas all the others exist for both CPU and GPU.
 
-Throughput
-----------
 
-Milliseconds per step, and the speedup over cgenn:
+.. tab-set::
 
-.. list-table::
-   :header-rows: 1
-   :widths: 8 14 16 16 18 16
+   .. tab-item:: Convex Hull
 
-   * - batch
-     - cgenn
-     - cgenn, compiled
-     - rotorch
-     - rotorch, operators
-     - rotorch, model
-   * - 32
-     - 39.9
-     - 31.6 (1.3×)
-     - 28.8 (1.4×)
-     - 10.8 (3.7×)
-     - 9.6 (4.2×)
-   * - 128
-     - 101.1
-     - 64.9 (1.6×)
-     - 39.7 (2.5×)
-     - 25.7 (3.9×)
-     - 24.6 (4.1×)
-   * - 512
-     - 359.6
-     - 205.3 (1.8×)
-     - 119.4 (3.0×)
-     - 68.6 (5.2×)
-     - 79.9 (4.5×)
-   * - 2048
-     - 1475.4
-     - 932.7 (1.6×)
-     - 479.6 (3.1×)
-     - 315.6 (4.7×)
-     - 345.9 (4.3×)
+      The convex hull regression of `Clifford Group Equivariant Neural Networks
+      <https://github.com/DavidRuhe/clifford-group-equivariant-neural-networks>`_ (cgenn).
+      The task is to predict the volume of the convex hull of 16 points in :math:`\mathbb{R}^5`,
+      so the algebra is :math:`Cl(5)` and the model is a linear embedding followed by four geometric product layers.
 
-Uncompiled, the lead grows with the batch size because cgenn contracts against the dense
-Cayley tensor, paying for all :math:`32^3` entries whatever the input grades are, while rotorch
-only evaluates the paths that the grades present can actually reach. Compiled, rotorch is between
-four and five and a half times faster than cgenn.
+      Both implementations are driven by the same script, :code:`examples/hulls.py`, so they see
+      the same data, the same schedule and the same optimizer::
 
-Compiling
----------
+          python examples/hulls.py                       # rotorch
+          python examples/hulls.py --compile operators   # torch.compile as kingdon's operator wrapper
+          python examples/hulls.py --compile model       # torch.compile over the whole model
+          python examples/hulls.py --backend triton      # one triton kernel per operator, cuda only
+          python examples/hulls.py --impl cgenn          # the original implementation
 
-:code:`--compile operators` hands :func:`torch.compile` to kingdon as its wrapper, so every
-operator kingdon generates for the algebra is compiled on its own: 98 functions for this
-model, plus their backward passes. :code:`--compile model` compiles the training step
-instead, which fuses across those operators rather than stopping at each one.
 
-Whole model compilation works because a multivector is a pytree whose coefficients are one
-tensor and whose keys are static context, and because nothing in the path raises: the model
-traces to **one graph with no breaks**, and :code:`fullgraph=True` succeeds and reproduces
-the eager loss and gradients exactly. cgenn cannot be compiled that strictly, since it
-indexes its weights with a boolean mask, whose result has a data dependent shape; its
-:code:`--compile model` column is therefore compiled with graph breaks. The lorentz model below
-traces to one graph as well, message passing, batch norms and gathers included.
+      .. tab-set::
 
-Which of the two wins depends on the batch size, and they cross between 128 and 512.
-Compiling the model removes almost all of the per step python and dispatch cost, which is
-what dominates a small batch. Compiling each operator gives inductor smaller graphs to
-schedule, which suits the memory bound work of a large batch better, and costs a fraction as
-long to compile: 98 small graphs rather than one large one.
+         .. tab-item:: GPU
+
+            Measured on an **NVIDIA RTX A4000**.
+
+            .. tab-set::
+
+               .. tab-item:: Time
+
+                  (Smaller is better.)
+
+                  .. raw:: html
+                     :file: _static/hulls-cuda-time.svg
+
+                  Milliseconds per step, and the speedup over cgenn:
+
+                  .. list-table::
+                     :header-rows: 1
+                     :widths: 8 12 16 14 18 16
+
+                     * - batch
+                       - cgenn
+                       - cgenn, compiled
+                       - rotorch
+                       - rotorch, operators
+                       - rotorch, triton
+                     * - 32
+                       - 24.1
+                       - 24.9 (0.97×)
+                       - 227.9 (0.11×)
+                       - 34.0 (0.71×)
+                       - 25.2 (0.96×)
+                     * - 128
+                       - 24.3
+                       - 25.0 (0.97×)
+                       - 228.7 (0.11×)
+                       - 33.9 (0.72×)
+                       - 25.2 (0.96×)
+                     * - 512
+                       - 26.8
+                       - 26.6 (1.01×)
+                       - 227.6 (0.12×)
+                       - 37.9 (0.71×)
+                       - 26.3 (1.02×)
+                     * - 2048
+                       - 68.3
+                       - 62.0 (1.10×)
+                       - 225.6 (0.30×)
+                       - 42.8 (1.60×)
+                       - 29.3 (2.33×)
+                     * - 4096
+                       - 129.1
+                       - 114.0 (1.13×)
+                       - 242.0 (0.53×)
+                       - 58.1 (2.22×)
+                       - 35.4 (3.65×)
+                     * - 8192
+                       - 247.7
+                       - 220.8 (1.12×)
+                       - 267.3 (0.93×)
+                       - 109.0 (2.27×)
+                       - 48.9 (5.07×)
+                     * - 16384
+                       - 489.1
+                       - 445.5 (1.10×)
+                       - 335.4 (1.46×)
+                       - 202.4 (2.42×)
+                       - 81.5 (6.00×)
+
+               .. tab-item:: Memory
+
+                  (Smaller is better.)
+
+                  .. raw:: html
+                     :file: _static/hulls-cuda-memory.svg
+
+               .. tab-item:: Parameters
+
+                    =========  ==========  ==========
+                    example         cgenn     rotorch
+                    =========  ==========  ==========
+                    hulls          58,849      38,881
+                    =========  ==========  ==========
+
+               .. tab-item:: Start-up
+
+                    =======================  ===================
+                    run                      first step
+                    =======================  ===================
+                    rotorch                  0.2 to 0.8 s
+                    compiled, warm cache     6 to 8 s
+                    compiled, cold cache     139 s to 276 s
+                    =======================  ===================
+
+         .. tab-item:: CPU
+
+            Measured on an **AMD Ryzen Threadripper PRO 7955WX**.
+
+   .. tab-item:: Lorentz
+
+      Coming soon.
+
+   .. tab-item:: O(3)
+
+      .. tab-set::
+
+         .. tab-item:: GPU
+
+            Measured on an **NVIDIA RTX A4000**.
+
+            .. tab-set::
+
+               .. tab-item:: Time
+
+                  (Smaller is better.)
+
+                  .. raw:: html
+                     :file: _static/o3-cuda-time.svg
+
+               .. tab-item:: Memory
+
+                  (Smaller is better.)
+
+                  .. raw:: html
+                     :file: _static/o3-cuda-memory.svg
+
+         .. tab-item:: CPU
+
+            Measured on an **AMD Ryzen Threadripper PRO 7955WX**.
+
+            (Smaller is better.)
+
+            .. raw:: html
+               :file: _static/o3-cpu-time.svg
+
+
+
 
 Other examples
 --------------
@@ -286,6 +382,13 @@ each run: the peak allocation of a forward, and of a forward and backward togeth
 `flash-clifford <https://github.com/tBuLi/flash-kingdon-clifford>`_ reports its memory. The
 batch size goes to 16384 on the card, where 2048 was as far as the cpu was worth taking.
 
+This machine has a column the M2 cannot run: :code:`--backend triton` asks kingdon for one
+triton kernel per operator instead of one torch call per symbolic multiply. It is a codegen
+switch rather than a compiler pass, emitted from the same polynomials the torch calls come
+from, and :func:`torch.compile` never sees the model. Every rotorch column on the card reaches
+the validation loss of the eager one to four decimals, triton and compiled operators alike, so
+the kernels and the fusions agree with what they replace.
+
 These are a different machine from the numbers at the top of this page, so read each device
 against itself rather than against the M2.
 
@@ -301,74 +404,87 @@ against itself rather than against the M2.
 
       .. list-table::
          :header-rows: 1
-         :widths: 10 14 18 16 20
+         :widths: 8 12 16 14 18 16
 
          * - batch
            - cgenn
            - cgenn, compiled
            - rotorch
            - rotorch, operators
+           - rotorch, triton
          * - 32
-           - 31.1
-           - 25.4 (1.22×)
-           - 224.4 (0.14×)
-           - 33.5 (0.93×)
+           - 24.1
+           - 24.9 (0.97×)
+           - 227.9 (0.11×)
+           - 34.0 (0.71×)
+           - 25.2 (0.96×)
          * - 128
-           - 30.8
-           - 24.7 (1.25×)
-           - 230.2 (0.13×)
-           - 33.6 (0.92×)
+           - 24.3
+           - 25.0 (0.97×)
+           - 228.7 (0.11×)
+           - 33.9 (0.72×)
+           - 25.2 (0.96×)
          * - 512
-           - 30.6
-           - 26.3 (1.16×)
-           - 237.1 (0.13×)
-           - 38.0 (0.81×)
+           - 26.8
+           - 26.6 (1.01×)
+           - 227.6 (0.12×)
+           - 37.9 (0.71×)
+           - 26.3 (1.02×)
          * - 2048
-           - 69.9
-           - 62.0 (1.13×)
-           - 239.0 (0.29×)
-           - 43.0 (1.63×)
+           - 68.3
+           - 62.0 (1.10×)
+           - 225.6 (0.30×)
+           - 42.8 (1.60×)
+           - 29.3 (2.33×)
          * - 4096
-           - 128.0
-           - 113.8 (1.12×)
-           - 240.1 (0.53×)
-           - 58.4 (2.19×)
+           - 129.1
+           - 114.0 (1.13×)
+           - 242.0 (0.53×)
+           - 58.1 (2.22×)
+           - 35.4 (3.65×)
          * - 8192
-           - 248.0
-           - 219.9 (1.13×)
-           - 268.6 (0.92×)
-           - 109.3 (2.27×)
+           - 247.7
+           - 220.8 (1.12×)
+           - 267.3 (0.93×)
+           - 109.0 (2.27×)
+           - 48.9 (5.07×)
          * - 16384
-           - 490.5
-           - 443.5 (1.11×)
-           - 346.6 (1.42×)
-           - 202.2 (2.43×)
+           - 489.1
+           - 445.5 (1.10×)
+           - 335.4 (1.46×)
+           - 202.4 (2.42×)
+           - 81.5 (6.00×)
 
       Every column is flat to batch 512 and rises after it, which is the same shape the cpu
-      table has; what differs is the height of the flat part and the slope after it. Three of
-      the four sit on a floor between 25 and 38 ms, near enough the same, because a step that small
-      is fixed cost whoever runs it. Eager rotorch's floor is 224 ms, seven times higher, and
+      table has; what differs is the height of the flat part and the slope after it. Four of
+      the five sit on a floor between 24 and 34 ms, near enough the same, because a step that small
+      is fixed cost whoever runs it. Eager rotorch's floor is 228 ms, nine times higher, and
       it holds that floor all the way to 4096: a step that does not notice a hundred and
       twenty-eight times the data, because it is not doing arithmetic, it is waiting for
       python to launch its next kernel. Past 2048 the marginal cost takes over and sets the
-      order, and :code:`--compile operators` is the fastest column on the card from there on.
+      order, and :code:`--backend triton` is the fastest column on the card from there on: 6.0×
+      cgenn at 16384, where :code:`--compile operators` reaches 2.4×.
 
       Fitting ms/step as a fixed cost plus a cost per sample, over all seven batch sizes:
 
       ==================  ===============  =================  =======
       run                 fixed per step   marginal           r²
       ==================  ===============  =================  =======
-      cgenn               19.5 ms          28.4 µs / sample   0.998
-      cgenn, compiled     15.1 ms          25.8 µs / sample   0.998
-      rotorch             224.0 ms         6.9 µs / sample    0.954
-      rotorch, operators  27.6 ms          10.4 µs / sample   0.988
+      cgenn               15.4 ms          28.7 µs / sample   0.999
+      cgenn, compiled     15.0 ms          25.9 µs / sample   0.998
+      rotorch             221.1 ms         6.6 µs / sample    0.967
+      rotorch, operators  27.6 ms          10.4 µs / sample   0.987
+      rotorch, triton     23.5 ms          3.4 µs / sample    0.991
       ==================  ===============  =================  =======
 
-      The marginal costs are the sparsity: 10.4 µs per sample against cgenn's 28.4, 2.7×
-      cheaper, and that is the ratio the speedup column is climbing towards as the fixed cost
-      stops mattering -- 1.6× at 2048, 2.2× at 4096, 2.4× at 16384. Eager rotorch's 6.9 µs is
-      the lowest marginal cost of the four and buys nothing, because 224 ms of launches is in
-      front of it.
+      The marginal costs are the sparsity, and triton's 3.4 µs per sample is the lowest of the
+      five: 8.4× cheaper than cgenn's 28.7, where compiled operators are 2.7× cheaper. That is
+      the ratio each speedup climbs towards as its fixed cost stops mattering -- triton is 2.3×
+      at 2048, 3.7× at 4096, 6.0× at 16384, and has not levelled off yet. Eager rotorch's 6.6 µs
+      buys nothing, because 221 ms of launches is in front of it, and the two rotorch backends
+      do the same multiply-adds: one kernel keeps the intermediates in registers where a
+      thousand torch calls write each of them out and read it back, which is both why triton's
+      fixed cost is a tenth of eager's and why its marginal cost is half.
 
       .. raw:: html
          :file: _static/hulls-cuda-memory.svg
@@ -377,68 +493,77 @@ against itself rather than against the M2.
 
       .. list-table::
          :header-rows: 1
-         :widths: 10 14 18 16 20
+         :widths: 8 12 16 14 18 16
 
          * - batch
            - cgenn
            - cgenn, compiled
            - rotorch
            - rotorch, operators
+           - rotorch, triton
          * - 32
            - 58.6
            - 58.3 (0.99×)
            - 23.4 (0.40×)
            - 21.5 (0.37×)
+           - 22.6 (0.39×)
          * - 128
            - 128.3
            - 127.2 (0.99×)
            - 38.1 (0.30×)
            - 30.5 (0.24×)
+           - 34.9 (0.27×)
          * - 512
            - 407.0
            - 401.5 (0.99×)
            - 97.0 (0.24×)
            - 66.6 (0.16×)
+           - 84.2 (0.21×)
          * - 2048
            - 1524.8
            - 1503.4 (0.99×)
            - 334.4 (0.22×)
            - 213.2 (0.14×)
+           - 308.9 (0.20×)
          * - 4096
            - 3010.2
            - 2970.0 (0.99×)
            - 646.6 (0.21×)
            - 404.6 (0.13×)
+           - 579.4 (0.19×)
          * - 8192
            - 5982.2
            - 5901.2 (0.99×)
            - 1275.1 (0.21×)
            - 791.1 (0.13×)
+           - 1108.8 (0.19×)
          * - 16384
            - 11929.3
            - 11755.6 (0.99×)
            - 2518.7 (0.21×)
-           - 1550.6 (0.13×)
+           - 1550.7 (0.13×)
+           - 2147.2 (0.18×)
 
       The memory is the cleaner result of the two, because nothing about it is a matter of
       launch overhead: it is the same 32 blades of every intermediate that the dense einsum
       writes down and the sparse product does not. rotorch holds a fifth of cgenn's memory
-      eager and an eighth compiled, and the ratio is settled by batch 512 and flat from there.
-      At 16384 that is 1.5 GiB against 11.9 GiB: cgenn is within four gigabytes of filling the
-      card and cannot have the next doubling at all, while rotorch is still using under a
-      tenth of it.
+      eager, a little under a fifth through triton and an eighth with compiled operators, and
+      every ratio is settled by batch 512 and flat from there. At 16384 that is 2.5, 2.1 and
+      1.5 GiB against 11.7: cgenn is within four and a half gigabytes of filling the card and
+      cannot have the next doubling at all, while the three rotorch columns are using between a
+      tenth and a sixth of it.
 
       Compiling barely moves it either way: inductor fuses arithmetic, not activations, and an
       activation that the backward will want has to exist whoever wrote it. A forward on its
-      own is within a percent of the figures above for the three uncompiled columns -- these
-      models keep almost everything for the backward -- and 13% under them for
-      :code:`--compile operators`, which is the only column where fusion drops an intermediate
-      the backward turns out not to need.
+      own is within a percent of the figures above for cgenn, its compiled form and eager
+      rotorch -- these models keep almost everything for the backward -- and up to 13% under
+      them for triton and compiled operators, the two columns where a fused kernel drops an
+      intermediate the backward turns out not to need.
 
-      :code:`--compile model` has no column: it failed on this machine too, in seven seconds,
-      before compiling anything. The log stayed on that machine, so the reason is not in the
-      csv, but the timing matches the failure of the three compiled cpu runs below to the
-      second, and those are known to be a missing C++ compiler.
+      :code:`--compile model` has no column on either backend. Both failed at batch 32, the
+      torch one after 7 s and the triton one after 41 s, and the sweep classified neither as
+      the compiler failure that the four compiled cpu runs below are. The logs stayed on that
+      machine, so the reason is not in the csv.
 
    .. tab-item:: CPU
       :sync: cpu
@@ -450,59 +575,81 @@ against itself rather than against the M2.
 
       .. list-table::
          :header-rows: 1
-         :widths: 10 16 20
+         :widths: 10 14 18 18
 
          * - batch
            - cgenn
            - rotorch
+           - rotorch, triton
          * - 32
-           - 56.7
-           - 54.2 (1.05×)
+           - 62.3
+           - 75.6 (0.82×)
+           - 76.7 (0.81×)
          * - 128
-           - 116.0
-           - 70.9 (1.64×)
+           - 128.0
+           - 93.7 (1.37×)
+           - 93.3 (1.37×)
          * - 512
-           - 376.8
-           - 145.0 (2.60×)
+           - 378.5
+           - 143.6 (2.64×)
+           - 142.5 (2.66×)
          * - 2048
-           - 1137.1
-           - 332.0 (3.42×)
+           - 1079.2
+           - 323.7 (3.33×)
+           - 325.4 (3.32×)
 
       ==================  ===============  ==================  =======
       run                 fixed per step   marginal            r²
       ==================  ===============  ==================  =======
-      cgenn               61.1 ms          530.2 µs / sample   0.996
-      rotorch             58.4 ms          135.5 µs / sample   0.992
+      cgenn               74.7 ms          496.0 µs / sample   0.995
+      rotorch             76.8 ms          121.2 µs / sample   0.999
+      rotorch, triton     76.6 ms          121.9 µs / sample   0.999
       ==================  ===============  ==================  =======
 
-      The two start level, because at batch 32 a step is fixed cost for both, and separate by
-      the marginal cost from there: 135.5 µs per sample against 530.2, 3.9× cheaper, which is
-      the same story the M2 tells at the top of this page and close to the same number. There
-      is no launch overhead on a cpu to hide it, which is why the cpu column needs no
-      compiling to show the sparsity and the cuda column does.
+      rotorch is a fifth behind at batch 32, where a step is mostly fixed cost for both, and
+      then the marginal cost takes over: 121.2 µs per sample against 496.0, 4.1× cheaper,
+      which is the same story the M2 tells at the top of this page. There is no launch overhead on a cpu to hide it, which is why the cpu column
+      needs no compiling to show the sparsity and the cuda column does.
 
-      The three compiled configurations have no rows. Inductor writes C++ for the cpu and
+      :code:`--backend triton` has a row here and no line on the figure. There is no triton for
+      the cpu, so kingdon's dispatch falls back to the torch backend as soon as it sees that no
+      argument is a cuda tensor, and this is the same column twice: never more than 1.5% apart
+      at any batch size, on identical validation losses. Only the first step is longer, 0.8 to 1.3 s
+      against 0.5 to 0.9, which is what the path that goes unused costs to set up.
+
+      The four compiled configurations have no rows. Inductor writes C++ for the cpu and
       needs a compiler for it, and :code:`cl.exe` was not on the path of the shell that ran
-      the sweep, so all three failed in about six seconds and the sweep recorded them and
+      the sweep, so all four failed in six to eighteen seconds and the sweep recorded them and
       moved on. They are the one gap in this matrix; a run from a developer prompt would fill
       them in.
 
-Compiling costs more on the card than it does on the M2 at the small batch sizes and less at
-the large ones, and the cache matters more than the batch size does:
+Start-up is paid per process, and on the card the ranges say more about what was already in a
+cache than about the batch size:
 
-=======================  ==================  ==================
-run                      first step, cold    first step, warm
-=======================  ==================  ==================
-cgenn                    0.3 to 1.0 s        --
-rotorch                  0.9 to 1.1 s        --
-cgenn, compiled          18 to 24 s          2.4 to 2.9 s
-rotorch, operators       12 to 397 s         10 to 14 s
-=======================  ==================  ==================
+=======================  ===================  ===================
+run                      first step, rep 1    first step, rep 2
+=======================  ===================  ===================
+cgenn                    0.2 to 1.0 s         0.2 to 1.0 s
+rotorch                  0.9 to 1.0 s         0.9 to 1.1 s
+cgenn, compiled          2.7 to 3.2 s         2.0 to 2.5 s
+rotorch, operators       14.4 to 15.5 s       9.9 to 11.5 s
+rotorch, triton          36 to 204 s          35 to 39 s
+=======================  ===================  ===================
 
-The 98 operators take twelve to twenty-six seconds to compile at batch 32 and 128 and about six
-and a half minutes from 512 up, where the shapes are large enough that inductor stops taking the
-cheap path. Warm, any of them is back in under fifteen seconds. At batch 16384, where compiling
-saves 144 ms a step, that cold compile has paid for itself after about 2,700 steps, or 100 warm.
+Inductor's kernels were already under :code:`$TMPDIR/torchinductor_$USER` from an earlier sweep
+on this machine, so neither compiled column above is cold and the gap between the two reps is
+process warm-up rather than compilation. In that earlier sweep, with the cache empty,
+:code:`--compile operators` took twelve to twenty-six seconds at batch 32 and 128 and about six
+and a half minutes from 512 up, where the shapes are large enough that inductor stops taking
+the cheap path.
+
+Triton does not warm up the same way: 35 to 39 s in every rep at every batch size, because the
+tile search compiles a candidate per operator and the autotuner then times the survivors, once
+per process. Only the very first process paid more than that, 204 s at batch 32 and 58 s at 128.
+At batch 16384 it is still cheap: triton saves 254 ms a step against eager rotorch and has paid
+for itself after about 140 steps, where :code:`--compile operators` saves 133 ms and pays back
+after 70. At 512 and below neither saves anything against cgenn, so there the start-up buys
+parity and nothing more.
 
 Devices
 -------
@@ -512,4 +659,5 @@ below a batch size of a few hundred and the GPU wins above it: at batch 32 rotor
 ms/step on mps against 28.8 on cpu, and at batch 2048 218.7 against 479.6. Neither :code:`--compile` mode
 runs there, since inductor's Metal backend cannot compile these kernels: the wide ones exceed
 Metal's limit of about 31 buffer arguments per kernel, one per blade, and the rest fail to
-build their shaders.
+build their shaders. :code:`--backend triton` is cuda only, and falls back to the torch backend
+anywhere else.
