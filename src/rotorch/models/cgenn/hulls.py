@@ -2,7 +2,7 @@ from torch import nn
 from kingdon import MultiVector
 
 from ...nn.cgenn import GeometricProduct, MVLinear
-from ...nn.cgenn.utils import register, scalar_normsq
+from ...nn.utils import register, scalar_normsq
 
 
 class ConvexHullCGMLP(nn.Module):

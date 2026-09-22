@@ -14,9 +14,14 @@ from typing import Callable
 
 import numpy as np
 import torch
-from rotorch.nn.cgenn.utils import mag2
+from rotorch.nn.utils import mag2
 from kingdon import MultiVector
 from torch.utils.data import DataLoader, TensorDataset
+
+# The implementations rotorch is measured against, and the checkout each is imported from. Their
+# names double as the names of the options that point at those checkouts.
+REFERENCES = dict(cgenn="clifford-group-equivariant-neural-networks",
+                  gatr="geometric-algebra-transformer")
 
 
 @dataclass
@@ -123,15 +128,16 @@ def train(args, task):
     val_loader = DataLoader(dataset(task, data_dir, "val", args.val_samples, seed=1),
                             batch_size=args.batch_size)
 
-    if args.impl == "cgenn":
-        sys.path.insert(0, args.cgenn_path)
+    if args.impl in REFERENCES:
+        sys.path.insert(0, getattr(args, f"{args.impl}_path"))
     try:
         model, loss_fn = task.models[args.impl](args)
     except ModuleNotFoundError as error:
-        if args.impl != "cgenn":
+        if args.impl not in REFERENCES:
             raise
-        raise SystemExit(f"Could not import the cgenn model ({error}). Point --cgenn-path at "
-                         "your clifford-group-equivariant-neural-networks checkout.") from error
+        raise SystemExit(f"Could not import the {args.impl} model ({error}). Point "
+                         f"--{args.impl}-path at your {REFERENCES[args.impl]} checkout, and "
+                         f"install what that needs beyond rotorch's own dependencies.") from error
     if args.compile == "model":
         # kingdon generates its operators on the first call, which dynamo cannot trace, and the
         # lazy layers size their parameters there too. So run once before compiling.
@@ -179,7 +185,10 @@ def run(task):
     parser.add_argument("--train-samples", type=int, default=256)
     parser.add_argument("--val-samples", type=int, default=1024)
     parser.add_argument("--hidden-features", type=int, default=32)
+    parser.add_argument("--hidden-s-features", type=int, default=128,
+                        help="scalar channels an example carries alongside its multivectors")
     parser.add_argument("--num-layers", type=int, default=4)
+    parser.add_argument("--heads", type=int, default=8)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--warmup", type=int, default=8)
@@ -192,8 +201,9 @@ def run(task):
     parser.add_argument("--compile", choices=["none", "operators", "model"], default="none",
                         help="compile every operator kingdon generates, which hands torch.compile "
                              "to kingdon as its wrapper, or the model as a whole")
-    parser.add_argument("--cgenn-path", default=os.path.join(
-        os.path.dirname(__file__), "..", "..", "clifford-group-equivariant-neural-networks"))
+    for impl, checkout in REFERENCES.items():
+        parser.add_argument(f"--{impl}-path",
+                            default=os.path.join(os.path.dirname(__file__), "..", "..", checkout))
     parser.set_defaults(**task.defaults)
     parser.set_defaults(**task.model_defaults.get(parser.parse_known_args()[0].impl, {}))
     args = parser.parse_args()

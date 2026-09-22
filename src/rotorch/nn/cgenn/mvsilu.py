@@ -5,7 +5,7 @@ from torch.nn.parameter import UninitializedParameter
 from torch import nn
 from kingdon import MultiVector
 
-from .utils import grade_of_blades, materialize_constants, mag2, norm
+from ..utils import grade_of_blades, materialize_constants, mag2, norm
 
 
 class MVSiLU(LazyModuleMixin, nn.Module):

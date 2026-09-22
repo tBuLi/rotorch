@@ -8,7 +8,7 @@ from torch.nn.parameter import UninitializedParameter
 from kingdon import MultiVector
 
 from ...nn.cgenn import FullyConnectedGeometricProduct, MVLayerNorm, MVLinear
-from ...nn.cgenn.utils import cat, grade_of_blades, invariants, materialize_constants, segment_mean
+from ...nn.utils import cat, grade_of_blades, invariants, materialize_constants, segment_mean
 
 
 class Bladewise(nn.Module):

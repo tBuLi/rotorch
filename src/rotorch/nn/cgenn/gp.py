@@ -9,7 +9,7 @@ from kingdon import MultiVector
 
 from .linear import MVLinear
 from .normalization import NormalizationLayer
-from .utils import register
+from ..utils import register
 
 
 def number_of_weights_wgp(X: MultiVector, Y: MultiVector) -> int:

@@ -11,12 +11,7 @@ from kingdon import MultiVector
 from .gp import number_of_weights_wgp, wgp
 from .linear import MVLinear
 from .normalization import NormalizationLayer
-from .utils import materialize_constants, register
-
-
-def insert_out_features(X: MultiVector) -> MultiVector:
-    """Make room for the output features, so that the weights broadcast over them."""
-    return einops.rearrange(materialize_constants(X), "... f -> ... 1 f")
+from ..utils import insert_out_features, register
 
 
 class FullyConnectedGeometricProduct(LazyModuleMixin, nn.Module):

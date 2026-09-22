@@ -7,8 +7,9 @@ EPS = 1e-6
 
 
 def cat(mvs: list[MultiVector]) -> MultiVector:
-    """Concatenate multivectors along their feature axis."""
-    packed, _ = einops.pack([mv.asmvtype() for mv in mvs], "n *")
+    """Concatenate multivectors along their feature axis, however many axes come before it."""
+    batch = " ".join(f"d{i}" for i in range(mvs[0].ndim - 1))
+    packed, _ = einops.pack([mv.asmvtype() for mv in mvs], f"{batch} *")
     return packed
 
 
@@ -29,6 +30,11 @@ def materialize_constants(mv: MultiVector) -> MultiVector:
     return mv
 
 
+def insert_out_features(X: MultiVector) -> MultiVector:
+    """Make room for the output features, so that the weights broadcast over them."""
+    return einops.rearrange(materialize_constants(X), "... f -> ... 1 f")
+
+
 def grade_of_blades(mv: MultiVector) -> torch.Tensor:
     """
     For every blade of `mv`, the index of its grade among the grades present, so that a layer
@@ -36,6 +42,21 @@ def grade_of_blades(mv: MultiVector) -> torch.Tensor:
     """
     index = {g: i for i, g in enumerate(mv.grades)}
     return torch.tensor([index[k.bit_count()] for k in mv.keys()])
+
+
+def degenerate(algebra) -> MultiVector | None:
+    """
+    The basis vector that squares to zero, or nothing at all in an algebra where every basis
+    vector squares to something. A projective algebra owes its extra equivariant maps to it.
+
+    Built by hand rather than taken from :code:`algebra.blades`, which under a projective basis
+    hands back a point carrying this vector as a constant of its layout rather than as a
+    coefficient, and so with no key to its name.
+    """
+    if 0 not in algebra.signature:
+        return None
+    key = algebra.canon2bin[f"e{algebra.signature.index(0) + algebra.start_index}"]
+    return MultiVector.fromkeysvalues(algebra, (key,), [1])
 
 
 def register(algebra, expr, **kwargs):

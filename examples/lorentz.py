@@ -14,7 +14,7 @@ import numpy as np
 import torch
 
 import benchmark
-from rotorch.nn.cgenn.utils import cat, mag2
+from rotorch.nn.utils import cat, mag2
 
 N_PRONGS, N_CONSTITUENTS = 3, 12
 BEAM_MASS, JET_MASS, JET_MOMENTUM, PRONG_SPREAD = 1.0, (150.0, 200.0), (400.0, 600.0), 0.1

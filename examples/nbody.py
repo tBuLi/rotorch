@@ -12,7 +12,7 @@ import numpy as np
 import torch
 
 import benchmark
-from rotorch.nn.cgenn.utils import cat
+from rotorch.nn.utils import cat
 
 N_BODIES, DIM = 5, 3
 DT, SETTLE, SPAN = 0.001, 1000, 1000

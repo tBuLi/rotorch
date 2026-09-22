@@ -2,7 +2,7 @@ from torch import nn
 from kingdon import MultiVector
 
 from ...nn.cgenn import GeometricProduct, MVLayerNorm, MVLinear, MVSiLU
-from ...nn.cgenn.utils import cat, segment_mean
+from ...nn.utils import cat, segment_mean
 
 
 class CEMLP(nn.Module):

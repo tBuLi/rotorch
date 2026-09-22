@@ -5,7 +5,7 @@ from torch.nn.parameter import UninitializedParameter
 from torch import nn
 from kingdon import MultiVector
 
-from .utils import EPS, grade_of_blades, materialize_constants, norm
+from ..utils import EPS, grade_of_blades, materialize_constants, norm
 
 
 class NormalizationLayer(LazyModuleMixin, nn.Module):

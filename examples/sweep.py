@@ -9,9 +9,13 @@ The matrix is every implementation x the batch sizes x cpu and cuda, each repeat
 faster run can be kept and so that a compiled run is seen once cold and once warm:
 
     python examples/sweep.py                        # everything this machine can run
+    python examples/sweep.py --example examples/gravity.py   # GATr rather than cgenn
     python examples/sweep.py --devices cuda         # gpu only
     python examples/sweep.py --preset quick         # eager only, small batches, one rep
     python examples/sweep.py --dry-run              # print the plan and stop
+
+Every example is measured against the implementation of its own paper, which for the cgenn
+examples is cgenn and for gravity is GATr, so the reference columns follow the example.
 
 Each run is a separate process, so one that dies takes its row down and nothing else. The csv
 is appended to as results land and is re-read on startup, so the sweep can be interrupted and
@@ -23,9 +27,10 @@ The whole thing is a few hours, most of it compiling: every batch size compiles 
 :code:`--configs` drops columns.
 
 The cgenn columns need its checkout on :code:`--cgenn-path`, plus pyyaml, scipy and
-scikit-learn, which are not rotorch's own dependencies. The triton columns need a gpu; on the
-cpu the flag does nothing and the run would only repeat the plain rotorch one, so they are
-left out of the plan.
+scikit-learn; the GATr columns need its checkout on :code:`--gatr-path`, plus xformers, which
+it imports whether or not the attention ever dispatches to it. None of these are rotorch's own
+dependencies. The triton columns need a gpu; on the cpu the flag does nothing and the run would
+only repeat the plain rotorch one, so they are left out of the plan.
 """
 import argparse
 import csv
@@ -43,16 +48,23 @@ import time
 # and also the order to run them in: the cheap ones answer most of the question.
 CONFIGS = {
     "cgenn": ["--impl", "cgenn"],
+    "gatr": ["--impl", "gatr"],
     "rotorch": [],
     "rotorch-triton": ["--backend", "triton"],
     "cgenn-compiled": ["--impl", "cgenn", "--compile", "model"],
+    "gatr-compiled": ["--impl", "gatr", "--compile", "model"],
     "rotorch-operators": ["--compile", "operators"],
     "rotorch-model": ["--compile", "model"],
     "rotorch-triton-model": ["--backend", "triton", "--compile", "model"],
 }
-# Run these first. The two eager ones cost nothing to start; triton pays a compile per kernel,
-# which is seconds against the minutes inductor wants for a whole model.
-FIRST = ("cgenn", "rotorch", "rotorch-triton")
+# Run these first. The eager ones cost nothing to start; triton pays a compile per kernel, which
+# is seconds against the minutes inductor wants for a whole model.
+FIRST = ("cgenn", "gatr", "rotorch", "rotorch-triton")
+
+# The reference every example is measured against, which is the one its own paper ships. An
+# example knows nothing of the others, so asking it for one of theirs is an error, not a row.
+REFERENCE = dict(hulls="cgenn", lorentz="cgenn", nbody="cgenn", o3="cgenn", o5="cgenn",
+                 gravity="gatr")
 
 FIELDS = ["timestamp", "host", "device", "config", "batch", "rep", "status", "median_ms",
           "mean_ms", "first_step_ms", "memory_forward_mib", "memory_step_mib", "total_s",
@@ -79,11 +91,22 @@ FAILURES = [("out of memory", "out-of-memory"),
             ("BackendCompilerFailed", "compile-failed"),
             ("InductorError", "compile-failed"),
             ("InternalTorchDynamoError", "dynamo-failed"),
-            ("Could not import the cgenn model", "cgenn-path"),
+            ("Could not import the", "reference-path"),
             ("ModuleNotFoundError", "import-error"),
             # A triton kernel that asks for more registers or shared memory than the card has.
             ("OutOfResources", "triton-resources"),
             ("PTXASError", "ptxas-failed")]
+
+
+def implementation(config):
+    """Which implementation a configuration runs, rotorch's own columns being rotorch itself."""
+    flags = CONFIGS[config]
+    return flags[flags.index("--impl") + 1] if "--impl" in flags else "rotorch"
+
+
+def reference(example):
+    """The implementation `example` is measured against."""
+    return REFERENCE[os.path.splitext(os.path.basename(example))[0]]
 
 
 def environment(python):
@@ -115,8 +138,8 @@ def run(example, config, device, batch, rep, args, environ):
                "--train-samples", str(max(args.train_samples, batch)),
                "--val-samples", str(args.val_samples), "--print-interval", str(args.steps),
                *CONFIGS[config]]
-    if args.cgenn_path:
-        command += ["--cgenn-path", args.cgenn_path]
+    if path := getattr(args, f"{implementation(config)}_path", None):
+        command += [f"--{implementation(config)}-path", path]
 
     start = time.perf_counter()
     try:
@@ -167,9 +190,14 @@ def completed(path):
                 row["status"] for row in csv.DictReader(handle)}
 
 
-def skip(config, device):
-    """There is no cpu triton: the flag is ignored and the run is a second plain rotorch run."""
-    return device == "cpu" and "triton" in CONFIGS[config]
+def skip(config, device, example):
+    """
+    There is no cpu triton: the flag is ignored and the run is a second plain rotorch run. And
+    the reference columns of the other papers are not this example's to run.
+    """
+    if device == "cpu" and "triton" in CONFIGS[config]:
+        return True
+    return implementation(config) not in ("rotorch", reference(example))
 
 
 def plan(args, has_cuda):
@@ -177,7 +205,7 @@ def plan(args, has_cuda):
     devices = args.devices or (["cpu", "cuda"] if has_cuda else ["cpu"])
     for device in devices:
         batches = args.cpu_batches if device == "cpu" else args.cuda_batches
-        configs = [c for c in CONFIGS if c in args.configs and not skip(c, device)]
+        configs = [c for c in CONFIGS if c in args.configs and not skip(c, device, args.example)]
         for stage in (FIRST, tuple(c for c in configs if c not in FIRST)):
             for batch in batches:
                 for config in [c for c in configs if c in stage]:
@@ -185,15 +213,16 @@ def plan(args, has_cuda):
                         yield config, device, batch, rep
 
 
-def table(best, oom, device, metric, title, ratio):
+def table(best, oom, device, metric, title, ratio, example):
     """
     One metric over the configurations and batch sizes of one device, each cell against the
-    cgenn cell beside it. :param ratio: how to turn the two into the figure in brackets --
+    reference cell beside it. :param ratio: how to turn the two into the figure in brackets --
     speedup for time, so that more is better, and the ratio itself for memory, so that less is,
     which is how flash-clifford reports it.
     """
+    against = reference(example)
     batches = sorted({key[2] for key in best if key[0] == device})
-    configs = [c for c in CONFIGS if not skip(c, device)
+    configs = [c for c in CONFIGS if not skip(c, device, example)
                and any(key[:2] == (device, c) and metric in best[key] for key in best)]
     if not configs:
         return
@@ -204,21 +233,21 @@ def table(best, oom, device, metric, title, ratio):
         cells = []
         for config in configs:
             value = best.get((device, config, batch), {}).get(metric)
-            baseline = best.get((device, "cgenn", batch), {}).get(metric)
+            baseline = best.get((device, against, batch), {}).get(metric)
             if value is None:
                 cells.append(("OOM" if (device, config, batch) in oom else "-").rjust(22))
-            elif baseline and config != "cgenn":
+            elif baseline and config != against:
                 cells.append(f"{value:.1f} ({ratio(baseline, value):.2f}x)".rjust(22))
             else:
                 cells.append(f"{value:.1f}".rjust(22))
         print(str(batch).rjust(7) + "".join(cells))
 
 
-def summarize(path):
+def summarize(path, example):
     """
-    What the docs want: the faster of the reps, the speedup over cgenn, and what each of them
-    asked the card for, as flash-clifford reports it -- a forward on its own and a forward and
-    backward together, each as a ratio to cgenn, where below one is a saving.
+    What the docs want: the faster of the reps, the speedup over the reference, and what each of
+    them asked the card for, as flash-clifford reports it -- a forward on its own and a forward
+    and backward together, each as a ratio to the reference, where below one is a saving.
     """
     best, fastest, oom = {}, {}, set()
     with open(path, encoding="utf-8", newline="") as handle:
@@ -234,15 +263,16 @@ def summarize(path):
                              ("median_ms", "memory_forward_mib", "memory_step_mib")
                              if row.get(name)}
 
+    against = reference(example)
     for device in dict.fromkeys(key[0] for key in best):
-        table(best, oom, device, "median_ms", "ms/step, and the speedup over cgenn",
-              lambda baseline, value: baseline / value)
+        table(best, oom, device, "median_ms", f"ms/step, and the speedup over {against}",
+              lambda baseline, value: baseline / value, example)
         table(best, oom, device, "memory_forward_mib",
-              "peak MiB of a forward, and the ratio to cgenn (below one is a saving)",
-              lambda baseline, value: value / baseline)
+              f"peak MiB of a forward, and the ratio to {against} (below one is a saving)",
+              lambda baseline, value: value / baseline, example)
         table(best, oom, device, "memory_step_mib",
-              "peak MiB of a forward and backward, and the ratio to cgenn",
-              lambda baseline, value: value / baseline)
+              f"peak MiB of a forward and backward, and the ratio to {against}",
+              lambda baseline, value: value / baseline, example)
 
 
 def main():
@@ -266,12 +296,19 @@ def main():
     parser.add_argument("--val-samples", type=int, default=1024)
     parser.add_argument("--timeout", type=int, default=3600, help="seconds, per run")
     parser.add_argument("--python", default=sys.executable)
-    parser.add_argument("--cgenn-path", default=None)
+    for name in dict.fromkeys(REFERENCE.values()):
+        parser.add_argument(f"--{name}-path", default=None)
     parser.add_argument("--preset", choices=["quick", "full"], default="full")
     parser.add_argument("--retry-failed", action="store_true",
                         help="rerun rows the csv records as failed")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+    # Each run is made from the example's own directory, so any path given here has to be
+    # resolved against this one before it is handed on.
+    args.example = os.path.abspath(args.example)
+    for name in dict.fromkeys(REFERENCE.values()):
+        if path := getattr(args, f"{name}_path"):
+            setattr(args, f"{name}_path", os.path.abspath(path))
 
     if args.preset == "quick":  # Twenty minutes, to check the machine before the long night.
         args.configs = list(FIRST)
@@ -325,7 +362,7 @@ def main():
                   f"{args.output}.{config}_{device}_b{batch}.log", flush=True)
             blocked.add((config, device))
 
-    summarize(args.output)
+    summarize(args.output, args.example)
     print(f"\nresults: {args.output}")
 
 

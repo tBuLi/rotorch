@@ -7,7 +7,7 @@ from torch.nn.parameter import UninitializedParameter
 from torch import nn
 from kingdon import MultiVector
 
-from .utils import grade_of_blades, materialize_constants
+from ..utils import grade_of_blades, materialize_constants
 
 def gradewise_linear(X: MultiVector, weights: MultiVector[None]) -> MultiVector:
     """
