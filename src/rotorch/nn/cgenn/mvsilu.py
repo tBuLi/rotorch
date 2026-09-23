@@ -5,7 +5,7 @@ from torch.nn.parameter import UninitializedParameter
 from torch import nn
 from kingdon import MultiVector
 
-from ..utils import grade_of_blades, materialize_constants, mag2, norm
+from ..utils import grade_of_blades, grade_mag2, grade_norm, materialize_constants
 
 
 class MVSiLU(LazyModuleMixin, nn.Module):
@@ -17,7 +17,7 @@ class MVSiLU(LazyModuleMixin, nn.Module):
     def __init__(self, invariant="mag2"):
         super().__init__()
 
-        self.invariant = {"mag2": mag2, "norm": norm}[invariant]
+        self.invariant = {"mag2": grade_mag2, "norm": grade_norm}[invariant]
         self.a = UninitializedParameter()
         self.b = UninitializedParameter()
 
@@ -39,8 +39,8 @@ class MVSiLU(LazyModuleMixin, nn.Module):
 
     def forward(self, input: MultiVector) -> MultiVector:
         input = materialize_constants(input)
-        gates = [torch.sigmoid(self.a[i] * (input.e if g == 0 else self.invariant(input.grade(g))) + self.b[i])
-                 for i, g in enumerate(self.grades)]
+        gates = [torch.sigmoid(self.a[i] * (input.e if g == 0 else invariant) + self.b[i])
+                 for i, (g, invariant) in enumerate(zip(self.grades, self.invariant(input)))]
         gates = torch.stack(torch.broadcast_tensors(*gates))
         gates = input.algebra.multivector(gates.index_select(0, self.blade_grades), keys=input.keys())
         return einops.einsum(input, gates, "..., ... -> ...")

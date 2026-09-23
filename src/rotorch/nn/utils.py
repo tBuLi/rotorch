@@ -17,7 +17,9 @@ def segment_mean(X: MultiVector, segment_ids: torch.Tensor, num_segments: int) -
     """Average the multivectors that share a segment id, over the axis the ids index."""
     counts = segment_ids.new_zeros(num_segments).index_add_(0, segment_ids, torch.ones_like(segment_ids))
     counts = einops.rearrange(counts.clamp(min=1), "segment -> segment 1")
-    return X.map(lambda v: v.new_zeros(num_segments, *v.shape[1:]).index_add_(0, segment_ids, v) / counts)
+    values = X.values()
+    sums = values.new_zeros(len(values), num_segments, *values.shape[2:]).index_add_(1, segment_ids, values)
+    return X.fromkeysvalues(X.algebra, X.keys(), sums / counts)
 
 
 def materialize_constants(mv: MultiVector) -> MultiVector:
@@ -85,7 +87,26 @@ def mag2(X: MultiVector):
 
 def norm(X: MultiVector):
     """Magnitude of the single grade multivector X, smoothed to stay differentiable at zero."""
-    return (mag2(X) ** 2 + 1e-16) ** 0.25
+    return _root(mag2(X))
+
+
+def _root(squared):
+    return (squared ** 2 + 1e-16) ** 0.25
+
+
+def gradewise_normsq(X: MultiVector) -> tuple[MultiVector, ...]:
+    """:func:`scalar_normsq` of every grade of X, as one operator rather than one per grade."""
+    return tuple(scalar_normsq(X.grade(g)) for g in X.grades)
+
+
+def grade_mag2(X: MultiVector) -> list:
+    """:func:`mag2` of every grade of X."""
+    return [mv.e for mv in register(X.algebra, gradewise_normsq)(X)]
+
+
+def grade_norm(X: MultiVector) -> list:
+    """:func:`norm` of every grade of X."""
+    return [_root(m) for m in grade_mag2(X)]
 
 
 def invariants(X: MultiVector) -> MultiVector:
@@ -94,5 +115,5 @@ def invariants(X: MultiVector) -> MultiVector:
     squared magnitude of every other grade, neither of which the group can see.
     """
     X = materialize_constants(X)
-    per_grade = torch.broadcast_tensors(*(X.e if g == 0 else mag2(X.grade(g)) for g in X.grades))
+    per_grade = torch.broadcast_tensors(*(X.e if g == 0 else m for g, m in zip(X.grades, grade_mag2(X))))
     return X.algebra.scalar(e=einops.rearrange(torch.stack(per_grade), "grade ... feature -> ... (feature grade)"))
