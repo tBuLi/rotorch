@@ -75,7 +75,7 @@ class GradeGate(LazyModuleMixin, nn.Module):
     def forward(self, input: MultiVector, h: MultiVector) -> MultiVector:
         gates = nn.functional.linear(self.hidden(h), self.weight, self.bias)
         gates = einops.rearrange(torch.sigmoid(gates.e), "... (feature grade) -> grade ... feature", feature=self.features)
-        gates = input.algebra.multivector(gates[self.blade_grades], keys=input.keys())
+        gates = input.algebra.multivector(gates.index_select(0, self.blade_grades), keys=input.keys())
         return einops.einsum(input, gates, "..., ... -> ...")
 
 

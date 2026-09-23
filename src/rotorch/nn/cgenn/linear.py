@@ -57,7 +57,7 @@ class MVLinear(LazyModuleMixin, nn.Module):
     def forward(self, input: MultiVector) -> MultiVector:
         input = materialize_constants(input)
         # A multivector holding the matrix of each blade, rather than the matrix of each grade.
-        weight = input.algebra.multivector(self.weight[self.blade_grades], keys=input.keys())
+        weight = input.algebra.multivector(self.weight.index_select(0, self.blade_grades), keys=input.keys())
         result = einops.einsum(input, weight, "... i, o i -> ... o")
         if self.bias is not None:
             result = result + input.algebra.scalar(e=self.bias)

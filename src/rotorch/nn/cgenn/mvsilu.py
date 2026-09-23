@@ -42,5 +42,5 @@ class MVSiLU(LazyModuleMixin, nn.Module):
         gates = [torch.sigmoid(self.a[i] * (input.e if g == 0 else self.invariant(input.grade(g))) + self.b[i])
                  for i, g in enumerate(self.grades)]
         gates = torch.stack(torch.broadcast_tensors(*gates))
-        gates = input.algebra.multivector(gates[self.blade_grades], keys=input.keys())
+        gates = input.algebra.multivector(gates.index_select(0, self.blade_grades), keys=input.keys())
         return einops.einsum(input, gates, "..., ... -> ...")

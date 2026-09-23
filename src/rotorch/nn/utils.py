@@ -39,9 +39,11 @@ def grade_of_blades(mv: MultiVector) -> torch.Tensor:
     """
     For every blade of `mv`, the index of its grade among the grades present, so that a layer
     can hold one parameter per grade and still apply them all in one go.
+
+    Made on the device of `mv`: a lazy layer sizes itself on its first input, after the model has been moved, and an index left on the cpu is copied over on every use, waiting for the card each time.
     """
     index = {g: i for i, g in enumerate(mv.grades)}
-    return torch.tensor([index[k.bit_count()] for k in mv.keys()])
+    return torch.tensor([index[k.bit_count()] for k in mv.keys()], device=getattr(mv.values(), "device", None))
 
 
 def degenerate(algebra) -> MultiVector | None:

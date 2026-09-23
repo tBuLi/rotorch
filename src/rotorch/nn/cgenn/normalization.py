@@ -40,5 +40,5 @@ class NormalizationLayer(LazyModuleMixin, nn.Module):
         # so the entries need broadcasting against each other before they can be stacked.
         norms = [s_a[i] * (norm(input.grade(g)) - 1) + 1 for i, g in enumerate(self.grades)]
         norms = torch.stack(torch.broadcast_tensors(*norms))
-        scale = input.algebra.multivector(1 / (norms[self.blade_grades] + EPS), keys=input.keys())
+        scale = input.algebra.multivector(1 / (norms.index_select(0, self.blade_grades) + EPS), keys=input.keys())
         return einops.einsum(input, scale, "..., ... -> ...")
