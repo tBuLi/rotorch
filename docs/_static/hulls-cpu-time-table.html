@@ -1,0 +1,63 @@
+<div class="bench-table">
+<style>
+.bench-table { --cgenn: #2a78d6; --cgenn-compiled: #2a78d6; --rotorch: #1baf7a; --rotorch-operators: #eda100; --rotorch-model: #eb6834; --rotorch-triton: #e87ba4; --ink: #0b0b0b; --ink-2: #52514e; --border: #e7e7e4; }
+.bench-table table { border-collapse: collapse; width: 100%;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px; font-variant-numeric: tabular-nums; }
+.bench-table caption { caption-side: top; text-align: left; color: var(--ink-2);
+  font-size: 12px; padding-bottom: 4px; }
+.bench-table th, .bench-table td { padding: 4px 10px; text-align: right;
+  border-bottom: 1px solid var(--border); white-space: nowrap; }
+.bench-table th:first-child, .bench-table td:first-child { text-align: left; color: var(--ink);
+  font-weight: 400; }
+.bench-table th { font-weight: 600; }
+.bench-table th.cgenn { color: var(--cgenn); }
+.bench-table th.cgenn-compiled { color: var(--cgenn-compiled); }
+.bench-table th.rotorch { color: var(--rotorch); }
+.bench-table th.rotorch-operators { color: var(--rotorch-operators); }
+.bench-table th.rotorch-model { color: var(--rotorch-model); }
+.bench-table th.rotorch-triton { color: var(--rotorch-triton); }
+.bench-table .ratio { color: var(--ink-2); }
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) .bench-table, body:where(:not([data-theme="light"])) .bench-table {
+    --ink: #ffffff; --ink-2: #c3c2b7; --border: #2b2c2f; --cgenn: #3987e5; --cgenn-compiled: #3987e5; --rotorch: #199e70; --rotorch-operators: #c98500; --rotorch-model: #d95926; --rotorch-triton: #d55181 } }
+:root[data-theme="dark"] .bench-table, body[data-theme="dark"] .bench-table {
+  --ink: #ffffff; --ink-2: #c3c2b7; --border: #2b2c2f; --cgenn: #3987e5; --cgenn-compiled: #3987e5; --rotorch: #199e70; --rotorch-operators: #c98500; --rotorch-model: #d95926; --rotorch-triton: #d55181 }
+</style>
+<table><caption>Milliseconds per step (ms / step)</caption>
+<thead><tr><th>batch size</th>
+<th class="cgenn">cgenn</th>
+<th class="cgenn-compiled">cgenn-compiled</th>
+<th class="rotorch">rotorch</th>
+<th class="rotorch-operators">rotorch-operators</th>
+<th class="rotorch-model">rotorch-model</th>
+</tr></thead><tbody>
+<tr><td>32</td>
+<td>53.6 <span class="ratio">(1.00×)</span></td>
+<td>53.6 <span class="ratio">(1.00×)</span></td>
+<td>49.8 <span class="ratio">(1.08×)</span></td>
+<td>20.6 <span class="ratio">(2.60×)</span></td>
+<td>8.3 <span class="ratio">(6.46×)</span></td>
+</tr>
+<tr><td>128</td>
+<td>127.2 <span class="ratio">(1.00×)</span></td>
+<td>87.3 <span class="ratio">(1.46×)</span></td>
+<td>66.6 <span class="ratio">(1.91×)</span></td>
+<td>30.9 <span class="ratio">(4.12×)</span></td>
+<td>19.0 <span class="ratio">(6.69×)</span></td>
+</tr>
+<tr><td>512</td>
+<td>378.7 <span class="ratio">(1.00×)</span></td>
+<td>212.0 <span class="ratio">(1.79×)</span></td>
+<td>144.4 <span class="ratio">(2.62×)</span></td>
+<td>51.1 <span class="ratio">(7.41×)</span></td>
+<td>23.2 <span class="ratio">(16.32×)</span></td>
+</tr>
+<tr><td>2048</td>
+<td>1,116.3 <span class="ratio">(1.00×)</span></td>
+<td>645.3 <span class="ratio">(1.73×)</span></td>
+<td>366.5 <span class="ratio">(3.05×)</span></td>
+<td>134.1 <span class="ratio">(8.32×)</span></td>
+<td>77.4 <span class="ratio">(14.42×)</span></td>
+</tr>
+</tbody></table></div>

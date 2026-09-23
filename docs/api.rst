@@ -2,8 +2,9 @@ API reference
 =============
 
 Both :mod:`rotorch.nn` and :mod:`rotorch.models` are organised one subpackage per architecture.
-Only cgenn is implemented so far, so everything below lives under ``cgenn``; GATr and
-others will appear alongside it rather than in place of it.
+cgenn and GATr are implemented so far, and others will appear alongside them rather than in
+place of them. What the two share, being about multivectors rather than about either paper,
+lives in :mod:`rotorch.nn.utils`.
 
 Layers
 ------
@@ -21,6 +22,14 @@ cgenn
    :imported-members:
    :show-inheritance:
 
+GATr
+^^^^
+
+.. automodule:: rotorch.nn.gatr
+   :members:
+   :imported-members:
+   :show-inheritance:
+
 Models
 ------
 
@@ -30,6 +39,14 @@ cgenn
 ^^^^^
 
 .. automodule:: rotorch.models.cgenn
+   :members:
+   :imported-members:
+   :show-inheritance:
+
+GATr
+^^^^
+
+.. automodule:: rotorch.models.gatr
    :members:
    :imported-members:
    :show-inheritance:

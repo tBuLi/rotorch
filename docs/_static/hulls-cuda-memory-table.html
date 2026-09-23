@@ -1,0 +1,92 @@
+<div class="bench-table">
+<style>
+.bench-table { --cgenn: #2a78d6; --cgenn-compiled: #2a78d6; --rotorch: #1baf7a; --rotorch-operators: #eda100; --rotorch-model: #eb6834; --rotorch-triton: #e87ba4; --ink: #0b0b0b; --ink-2: #52514e; --border: #e7e7e4; }
+.bench-table table { border-collapse: collapse; width: 100%;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 13px; font-variant-numeric: tabular-nums; }
+.bench-table caption { caption-side: top; text-align: left; color: var(--ink-2);
+  font-size: 12px; padding-bottom: 4px; }
+.bench-table th, .bench-table td { padding: 4px 10px; text-align: right;
+  border-bottom: 1px solid var(--border); white-space: nowrap; }
+.bench-table th:first-child, .bench-table td:first-child { text-align: left; color: var(--ink);
+  font-weight: 400; }
+.bench-table th { font-weight: 600; }
+.bench-table th.cgenn { color: var(--cgenn); }
+.bench-table th.cgenn-compiled { color: var(--cgenn-compiled); }
+.bench-table th.rotorch { color: var(--rotorch); }
+.bench-table th.rotorch-operators { color: var(--rotorch-operators); }
+.bench-table th.rotorch-model { color: var(--rotorch-model); }
+.bench-table th.rotorch-triton { color: var(--rotorch-triton); }
+.bench-table .ratio { color: var(--ink-2); }
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) .bench-table, body:where(:not([data-theme="light"])) .bench-table {
+    --ink: #ffffff; --ink-2: #c3c2b7; --border: #2b2c2f; --cgenn: #3987e5; --cgenn-compiled: #3987e5; --rotorch: #199e70; --rotorch-operators: #c98500; --rotorch-model: #d95926; --rotorch-triton: #d55181 } }
+:root[data-theme="dark"] .bench-table, body[data-theme="dark"] .bench-table {
+  --ink: #ffffff; --ink-2: #c3c2b7; --border: #2b2c2f; --cgenn: #3987e5; --cgenn-compiled: #3987e5; --rotorch: #199e70; --rotorch-operators: #c98500; --rotorch-model: #d95926; --rotorch-triton: #d55181 }
+</style>
+<table><caption>Peak memory of a forward and backward (peak MiB)</caption>
+<thead><tr><th>batch size</th>
+<th class="cgenn">cgenn</th>
+<th class="cgenn-compiled">cgenn-compiled</th>
+<th class="rotorch">rotorch</th>
+<th class="rotorch-operators">rotorch-operators</th>
+<th class="rotorch-model">rotorch-model</th>
+<th class="rotorch-triton">rotorch-triton</th>
+</tr></thead><tbody>
+<tr><td>32</td>
+<td>57.6 <span class="ratio">(1.00×)</span></td>
+<td>57.3 <span class="ratio">(0.99×)</span></td>
+<td>22.4 <span class="ratio">(0.39×)</span></td>
+<td>20.6 <span class="ratio">(0.36×)</span></td>
+<td>20.0 <span class="ratio">(0.35×)</span></td>
+<td>21.6 <span class="ratio">(0.38×)</span></td>
+</tr>
+<tr><td>128</td>
+<td>127.3 <span class="ratio">(1.00×)</span></td>
+<td>126.2 <span class="ratio">(0.99×)</span></td>
+<td>37.1 <span class="ratio">(0.29×)</span></td>
+<td>29.6 <span class="ratio">(0.23×)</span></td>
+<td>27.1 <span class="ratio">(0.21×)</span></td>
+<td>33.5 <span class="ratio">(0.26×)</span></td>
+</tr>
+<tr><td>512</td>
+<td>406.0 <span class="ratio">(1.00×)</span></td>
+<td>401.6 <span class="ratio">(0.99×)</span></td>
+<td>96.0 <span class="ratio">(0.24×)</span></td>
+<td>66.1 <span class="ratio">(0.16×)</span></td>
+<td>55.3 <span class="ratio">(0.14×)</span></td>
+<td>81.7 <span class="ratio">(0.20×)</span></td>
+</tr>
+<tr><td>2048</td>
+<td>1,523.8 <span class="ratio">(1.00×)</span></td>
+<td>1,502.4 <span class="ratio">(0.99×)</span></td>
+<td>333.4 <span class="ratio">(0.22×)</span></td>
+<td>214.0 <span class="ratio">(0.14×)</span></td>
+<td>171.2 <span class="ratio">(0.11×)</span></td>
+<td>287.7 <span class="ratio">(0.19×)</span></td>
+</tr>
+<tr><td>4096</td>
+<td>3,009.2 <span class="ratio">(1.00×)</span></td>
+<td>2,969.0 <span class="ratio">(0.99×)</span></td>
+<td>645.6 <span class="ratio">(0.21×)</span></td>
+<td>406.4 <span class="ratio">(0.14×)</span></td>
+<td>320.4 <span class="ratio">(0.11×)</span></td>
+<td>556.7 <span class="ratio">(0.18×)</span></td>
+</tr>
+<tr><td>8192</td>
+<td>5,981.2 <span class="ratio">(1.00×)</span></td>
+<td>5,900.2 <span class="ratio">(0.99×)</span></td>
+<td>1,274.1 <span class="ratio">(0.21×)</span></td>
+<td>795.4 <span class="ratio">(0.13×)</span></td>
+<td>622.9 <span class="ratio">(0.10×)</span></td>
+<td>1,079.8 <span class="ratio">(0.18×)</span></td>
+</tr>
+<tr><td>16384</td>
+<td>11,928.3 <span class="ratio">(1.00×)</span></td>
+<td>11,754.6 <span class="ratio">(0.99×)</span></td>
+<td>2,517.7 <span class="ratio">(0.21×)</span></td>
+<td>1,559.9 <span class="ratio">(0.13×)</span></td>
+<td>1,215.9 <span class="ratio">(0.10×)</span></td>
+<td>2,090.2 <span class="ratio">(0.18×)</span></td>
+</tr>
+</tbody></table></div>
