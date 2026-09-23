@@ -12,6 +12,7 @@ faster run can be kept and so that a compiled run is seen once cold and once war
     python examples/sweep.py --example examples/gravity.py   # GATr rather than cgenn
     python examples/sweep.py --devices cuda         # gpu only
     python examples/sweep.py --preset quick         # eager only, small batches, one rep
+    python examples/sweep.py --preset ends          # everything, smallest and largest batch, one rep
     python examples/sweep.py --dry-run              # print the plan and stop
 
 Every example is measured against the implementation of its own paper, which for the cgenn
@@ -298,7 +299,7 @@ def main():
     parser.add_argument("--python", default=sys.executable)
     for name in dict.fromkeys(REFERENCE.values()):
         parser.add_argument(f"--{name}-path", default=None)
-    parser.add_argument("--preset", choices=["quick", "full"], default="full")
+    parser.add_argument("--preset", choices=["quick", "ends", "full"], default="full")
     parser.add_argument("--retry-failed", action="store_true",
                         help="rerun rows the csv records as failed")
     parser.add_argument("--dry-run", action="store_true")
@@ -313,6 +314,10 @@ def main():
     if args.preset == "quick":  # Twenty minutes, to check the machine before the long night.
         args.configs = list(FIRST)
         args.cpu_batches = args.cuda_batches = [32, 512]
+        args.reps = 1
+    elif args.preset == "ends":  # Where the host and where the card sets the pace, in a fraction of the full run; a later full run into the same csv fills in the rest.
+        args.cpu_batches = [min(args.cpu_batches), max(args.cpu_batches)]
+        args.cuda_batches = [min(args.cuda_batches), max(args.cuda_batches)]
         args.reps = 1
 
     environ = environment(args.python)
