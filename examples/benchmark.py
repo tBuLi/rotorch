@@ -123,8 +123,9 @@ def train(args, task):
                          f"{args.batch_size}, which leaves no batch to train on.")
     torch.manual_seed(args.seed)
     data_dir = args.data_dir or os.path.join(os.environ.get("DATAROOT", "data"), task.name)
-    train_loader = DataLoader(dataset(task, data_dir, "train", args.train_samples, seed=0),
-                              batch_size=args.batch_size, shuffle=True, drop_last=True)
+    # The training set lives on the device and every batch is drawn there.
+    train_set = [t.to(args.device) for t in dataset(task, data_dir, "train", args.train_samples, seed=0).tensors]
+    per_epoch = len(train_set[0]) // args.batch_size
     val_loader = DataLoader(dataset(task, data_dir, "val", args.val_samples, seed=1),
                             batch_size=args.batch_size)
 
@@ -141,17 +142,16 @@ def train(args, task):
     if args.compile == "model":
         # kingdon generates its operators on the first call, which dynamo cannot trace, and the
         # lazy layers size their parameters there too. So run once before compiling.
-        loss_fn(*(t.to(args.device) for t in next(iter(train_loader))))
+        loss_fn(*(t[:args.batch_size] for t in train_set))
         loss_fn = torch.compile(loss_fn)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
-    times, batches = [], iter(())
+    times = []
     for step in range(args.steps):
-        batch = next(batches, None)
-        if batch is None:
-            batches = iter(train_loader)
-            batch = next(batches)
-        batch = [t.to(args.device) for t in batch]
+        if step % per_epoch == 0:
+            order = torch.randperm(len(train_set[0]), device=args.device)
+        index = order[step % per_epoch * args.batch_size:][:args.batch_size]
+        batch = [t[index] for t in train_set]
 
         synchronize(args.device)
         start = time.perf_counter()
