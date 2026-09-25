@@ -1,3 +1,5 @@
+from functools import partial
+
 from torch import nn
 from kingdon import MultiVector
 
@@ -28,17 +30,20 @@ class CEMLP(nn.Module):
 
 
 class EGCL(nn.Module):
-    """Equivariant graph convolution: message, mean aggregation and update."""
+    """
+    Equivariant graph convolution: message, mean aggregation and update.
+
+    :param mlp: (in, hidden, out features) -> the edge or the node model; cgenn's :class:`CEMLP` by default.
+    """
 
     def __init__(self, in_features, hidden_features, out_features, edge_attr_features=0,
-                 node_attr_features=0, residual=True, normalization_init=0):
+                 node_attr_features=0, residual=True, normalization_init=0, mlp=None):
         super().__init__()
 
+        mlp = mlp or partial(CEMLP, normalization_init=normalization_init)
         self.residual = residual
-        self.edge_model = CEMLP(in_features + edge_attr_features, hidden_features,
-                                out_features, normalization_init=normalization_init)
-        self.node_model = CEMLP(in_features + out_features + node_attr_features, hidden_features,
-                                out_features, normalization_init=normalization_init)
+        self.edge_model = mlp(in_features + edge_attr_features, hidden_features, out_features)
+        self.node_model = mlp(in_features + out_features + node_attr_features, hidden_features, out_features)
 
     def message(self, h_i, h_j, edge_attr=None):
         input = h_i - h_j if edge_attr is None else cat([h_i - h_j, edge_attr])
@@ -63,13 +68,13 @@ class NBodyCGGNN(nn.Module):
     """Predict the displacement of charged particles from their positions and velocities."""
 
     def __init__(self, in_features=3, hidden_features=28, out_features=1, edge_features_in=1,
-                 n_layers=3, normalization_init=0, residual=True):
+                 n_layers=3, normalization_init=0, residual=True, mlp=None):
         super().__init__()
 
         self.embedding = MVLinear(in_features, hidden_features, gradewise=False)
         self.layers = nn.ModuleList(
             EGCL(hidden_features, hidden_features, hidden_features, edge_features_in,
-                 residual=residual, normalization_init=normalization_init)
+                 residual=residual, normalization_init=normalization_init, mlp=mlp)
             for _ in range(n_layers)
         )
         self.projection = MVLinear(hidden_features, out_features)

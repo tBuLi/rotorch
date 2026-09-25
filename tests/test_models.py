@@ -1,5 +1,6 @@
 import pytest
 import torch
+from rotorch.models import flashclifford
 from rotorch.models.cgenn import ConvexHullCGMLP, LorentzCGGNN, NBodyCGGNN, O3CGMLP, O5CGMLP
 from rotorch.models.gatr import GATr, NBodyGATr
 from rotorch.nn.utils import cat
@@ -31,6 +32,15 @@ def test_nbody(alg3, versor, assert_equivariant):
     edges = (torch.tensor([0, 1, 2, 3, 4]), torch.tensor([1, 2, 3, 4, 0]))
     edge_attr = alg3.scalar(e=torch.randn(5, 1))  # Invariant, so it does not rotate along.
     model = NBodyCGGNN(hidden_features=6, n_layers=2)
+    b = model(h, edges, edge_attr)
+    assert b.shape == (5, 1) and b.keys() == (1, 2, 4)
+    assert_equivariant(lambda x: model(x, edges, edge_attr), versor(alg3), h)
+
+def test_nbody_flashclifford(alg3, versor, assert_equivariant):
+    h = alg3.multivector(torch.randn(8, 5, 3))
+    edges = (torch.tensor([0, 1, 2, 3, 4]), torch.tensor([1, 2, 3, 4, 0]))
+    edge_attr = alg3.scalar(e=torch.randn(5, 1))
+    model = flashclifford.NBodyCGGNN(hidden_features=6, n_layers=2)
     b = model(h, edges, edge_attr)
     assert b.shape == (5, 1) and b.keys() == (1, 2, 4)
     assert_equivariant(lambda x: model(x, edges, edge_attr), versor(alg3), h)

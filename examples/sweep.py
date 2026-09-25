@@ -16,7 +16,9 @@ faster run can be kept and so that a compiled run is seen once cold and once war
     python examples/sweep.py --dry-run              # print the plan and stop
 
 Every example is measured against the implementation of its own paper, which for the cgenn
-examples is cgenn and for gravity is GATr, so the reference columns follow the example.
+examples is cgenn and for gravity is GATr, so the reference columns follow the example. Where
+rotorch also builds the architecture of another paper for an example, as the flashclifford
+columns of n-body do, those columns are measured against the same reference.
 
 Each run is a separate process, so one that dies takes its row down and nothing else. The csv
 is appended to as results land and is re-read on startup, so the sweep can be interrupted and
@@ -52,20 +54,26 @@ CONFIGS = {
     "gatr": ["--impl", "gatr"],
     "rotorch": [],
     "rotorch-triton": ["--backend", "triton"],
+    "flashclifford": ["--impl", "flashclifford"],
+    "flashclifford-triton": ["--impl", "flashclifford", "--backend", "triton"],
     "cgenn-compiled": ["--impl", "cgenn", "--compile", "model"],
     "gatr-compiled": ["--impl", "gatr", "--compile", "model"],
     "rotorch-operators": ["--compile", "operators"],
     "rotorch-model": ["--compile", "model"],
     "rotorch-triton-model": ["--backend", "triton", "--compile", "model"],
+    "flashclifford-model": ["--impl", "flashclifford", "--compile", "model"],
+    "flashclifford-triton-model": ["--impl", "flashclifford", "--backend", "triton", "--compile", "model"],
 }
 # Run these first. The eager ones cost nothing to start; triton pays a compile per kernel, which
 # is seconds against the minutes inductor wants for a whole model.
-FIRST = ("cgenn", "gatr", "rotorch", "rotorch-triton")
+FIRST = ("cgenn", "gatr", "rotorch", "rotorch-triton", "flashclifford", "flashclifford-triton")
 
 # The reference every example is measured against, which is the one its own paper ships. An
 # example knows nothing of the others, so asking it for one of theirs is an error, not a row.
 REFERENCE = dict(hulls="cgenn", lorentz="cgenn", nbody="cgenn", o3="cgenn", o5="cgenn",
                  gravity="gatr")
+# The architectures of other papers that rotorch builds for an example, beside the one of its own paper.
+ALSO = dict(nbody=("flashclifford",))
 
 FIELDS = ["timestamp", "host", "device", "config", "batch", "rep", "status", "median_ms",
           "mean_ms", "first_step_ms", "memory_forward_mib", "memory_step_mib", "total_s",
@@ -105,9 +113,13 @@ def implementation(config):
     return flags[flags.index("--impl") + 1] if "--impl" in flags else "rotorch"
 
 
+def example_name(example):
+    return os.path.splitext(os.path.basename(example))[0]
+
+
 def reference(example):
     """The implementation `example` is measured against."""
-    return REFERENCE[os.path.splitext(os.path.basename(example))[0]]
+    return REFERENCE[example_name(example)]
 
 
 def environment(python):
@@ -194,11 +206,11 @@ def completed(path):
 def skip(config, device, example):
     """
     There is no cpu triton: the flag is ignored and the run is a second plain rotorch run. And
-    the reference columns of the other papers are not this example's to run.
+    the columns of the other papers are not this example's to run, unless rotorch builds it theirs.
     """
     if device == "cpu" and "triton" in CONFIGS[config]:
         return True
-    return implementation(config) not in ("rotorch", reference(example))
+    return implementation(config) not in ("rotorch", reference(example), *ALSO.get(example_name(example), ()))
 
 
 def plan(args, has_cuda):

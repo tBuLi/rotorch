@@ -22,6 +22,8 @@ from torch.utils.data import DataLoader, TensorDataset
 # names double as the names of the options that point at those checkouts.
 REFERENCES = dict(cgenn="clifford-group-equivariant-neural-networks",
                   gatr="geometric-algebra-transformer")
+# The implementations rotorch builds out of kingdon operators, which is what --backend and --compile operators are about.
+KINGDON = ("rotorch", "flashclifford")
 
 
 @dataclass
@@ -207,7 +209,7 @@ def run(task):
     parser.set_defaults(**task.defaults)
     parser.set_defaults(**task.model_defaults.get(parser.parse_known_args()[0].impl, {}))
     args = parser.parse_args()
-    if args.impl != "rotorch" and (args.compile == "operators" or args.backend != "torch"):
+    if args.impl not in KINGDON and (args.compile == "operators" or args.backend != "torch"):
         raise SystemExit("--backend and --compile operators are about the operators kingdon "
-                         "generates, so rotorch only.")
+                         f"generates, so {' and '.join(KINGDON)} only.")
     train(args, task)
