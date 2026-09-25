@@ -2,7 +2,7 @@ import math
 
 import torch
 from kingdon import MultiVector
-from sympy import Symbol, erf
+from sympy import Symbol, erf, Expr
 from torch import nn
 from torch.nn.modules.lazy import LazyModuleMixin
 from torch.nn.parameter import UninitializedParameter
@@ -12,7 +12,7 @@ from ..cgenn.gp import number_of_weights_wgp, wgp
 from ..utils import EPS, materialize_constants, register
 
 
-def gelu(x):
+def gelu(x: Expr) -> Expr:
     """The GELU gate, :math:`\\Phi(x) = (1 + \\mathrm{erf}(x / \\sqrt{2})) / 2`."""
     return 0.5 * (1 + erf(x / math.sqrt(2)))
 
@@ -21,13 +21,8 @@ def gelu_wgp(X: MultiVector, Y: MultiVector, weights: MultiVector[None]) -> Mult
     """
     Both operands gated by the GELU of their scalar part, then their weighted geometric product: what flash-clifford fuses into one kernel, short of its normalization.
     Compiled over sympy symbols, so that the gate is differentiated along with the product.
-
-    The gated operands enter the product as symbols of their own, and the gated coefficients take their place afterwards.
-    Kingdon expands a product of symbolic coefficients, which would multiply every term of the product out against both gates: in Cl(3) that is 2.5 times the multiplications forward and twice backward.
     """
-    gated = {Symbol(f'{v}_gelu'): v * gelu(M.e) for M in (X, Y) for v in M.values()}
-    stand_in = lambda M: M.map(lambda v: Symbol(f'{v}_gelu'))
-    return wgp(stand_in(X), stand_in(Y), weights).map(lambda v: v.subs(gated))
+    return wgp(X * gelu(X.e), Y * gelu(Y.e), weights)
 
 
 def rms_norm(X: MultiVector) -> MultiVector:
