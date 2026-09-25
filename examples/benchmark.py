@@ -23,7 +23,7 @@ from torch.utils.data import DataLoader, TensorDataset
 REFERENCES = dict(cgenn="clifford-group-equivariant-neural-networks",
                   gatr="geometric-algebra-transformer")
 # The implementations rotorch builds out of kingdon operators, which is what --backend and --compile operators are about.
-KINGDON = ("rotorch", "flashclifford")
+KINGDON = ("rotorch", "fk")
 
 
 @dataclass

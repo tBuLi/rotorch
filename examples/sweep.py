@@ -17,7 +17,7 @@ faster run can be kept and so that a compiled run is seen once cold and once war
 
 Every example is measured against the implementation of its own paper, which for the cgenn
 examples is cgenn and for gravity is GATr, so the reference columns follow the example. Where
-rotorch also builds the architecture of another paper for an example, as the flashclifford
+rotorch also builds the architecture of another paper for an example, as the fk
 columns of n-body do, those columns are measured against the same reference.
 
 Each run is a separate process, so one that dies takes its row down and nothing else. The csv
@@ -54,26 +54,29 @@ CONFIGS = {
     "gatr": ["--impl", "gatr"],
     "rotorch": [],
     "rotorch-triton": ["--backend", "triton"],
-    "flashclifford": ["--impl", "flashclifford"],
-    "flashclifford-triton": ["--impl", "flashclifford", "--backend", "triton"],
+    "fk-eager": ["--impl", "fk"],
+    "fk-triton": ["--impl", "fk", "--backend", "triton"],
     "cgenn-compiled": ["--impl", "cgenn", "--compile", "model"],
     "gatr-compiled": ["--impl", "gatr", "--compile", "model"],
     "rotorch-operators": ["--compile", "operators"],
     "rotorch-model": ["--compile", "model"],
     "rotorch-triton-model": ["--backend", "triton", "--compile", "model"],
-    "flashclifford-model": ["--impl", "flashclifford", "--compile", "model"],
-    "flashclifford-triton-model": ["--impl", "flashclifford", "--backend", "triton", "--compile", "model"],
+    "fk-model": ["--impl", "fk", "--compile", "model"],
+    "fk-triton-model": ["--impl", "fk", "--backend", "triton", "--compile", "model"],
 }
 # Run these first. The eager ones cost nothing to start; triton pays a compile per kernel, which
 # is seconds against the minutes inductor wants for a whole model.
-FIRST = ("cgenn", "gatr", "rotorch", "rotorch-triton", "flashclifford", "flashclifford-triton")
+FIRST = ("cgenn", "gatr", "rotorch", "rotorch-triton", "fk-eager", "fk-triton")
 
 # The reference every example is measured against, which is the one its own paper ships. An
 # example knows nothing of the others, so asking it for one of theirs is an error, not a row.
 REFERENCE = dict(hulls="cgenn", lorentz="cgenn", nbody="cgenn", o3="cgenn", o5="cgenn",
                  gravity="gatr")
 # The architectures of other papers that rotorch builds for an example, beside the one of its own paper.
-ALSO = dict(nbody=("flashclifford",))
+ALSO = dict(nbody=("fk",))
+CUDA_BATCHES = [32, 128, 512, 2048, 4096, 8192, 16384]
+# Where an example's cuda batches stop by default. An n-body sample is a graph of five bodies and twenty edges, twenty times the others'.
+LARGEST = dict(nbody=2048)
 
 FIELDS = ["timestamp", "host", "device", "config", "batch", "rep", "status", "median_ms",
           "mean_ms", "first_step_ms", "memory_forward_mib", "memory_step_mib", "total_s",
@@ -300,7 +303,7 @@ def main():
     parser.add_argument("--cpu-batches", nargs="*", type=int,
                         default=[32, 128, 512, 2048])
     parser.add_argument("--cuda-batches", nargs="*", type=int,
-                        default=[32, 128, 512, 2048, 4096, 8192, 16384])
+                        help=f"default: {' '.join(map(str, CUDA_BATCHES))}, up to the example's own largest in LARGEST")
     parser.add_argument("--reps", type=int, default=2,
                         help="the faster one is the timing; the first is also the cold compile")
     parser.add_argument("--steps", type=int, default=72)
@@ -322,6 +325,8 @@ def main():
     for name in dict.fromkeys(REFERENCE.values()):
         if path := getattr(args, f"{name}_path"):
             setattr(args, f"{name}_path", os.path.abspath(path))
+    largest = LARGEST.get(example_name(args.example), CUDA_BATCHES[-1])
+    args.cuda_batches = args.cuda_batches or [b for b in CUDA_BATCHES if b <= largest]
 
     if args.preset == "quick":  # Twenty minutes, to check the machine before the long night.
         args.configs = list(FIRST)

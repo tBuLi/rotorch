@@ -2,7 +2,7 @@
 Predict where charged particles end up, the nbody example of cgenn.
 
     python examples/nbody.py
-    python examples/nbody.py --impl flashclifford
+    python examples/nbody.py --impl fk
     python examples/nbody.py --impl cgenn
 
 cgenn reads this dataset from the files the EGNN repository ships. This one is simulated here
@@ -81,8 +81,8 @@ def rotorch(args, network=None):
     return model, loss_fn
 
 
-def flashclifford(args):
-    """The same network with the layers of flash-clifford (Zhdanov, 2025) in its MLPs, which it offers as their faster replacement, built by rotorch."""
+def fk(args):
+    """The same network with the layers of flash-clifford (Zhdanov, 2025) in its MLPs, which it offers as their faster replacement, built by rotorch out of kingdon operators."""
     from rotorch.models.flashclifford import NBodyCGGNN
 
     return rotorch(args, NBodyCGGNN)
@@ -100,7 +100,7 @@ def cgenn(args):
 
 
 task = benchmark.Task(name="nbody", generate=generate,
-                      models=dict(rotorch=rotorch, flashclifford=flashclifford, cgenn=cgenn),
+                      models=dict(rotorch=rotorch, fk=fk, cgenn=cgenn),
                       defaults=dict(hidden_features=28, num_layers=3, batch_size=100,
                                     train_samples=3000, val_samples=512))
 

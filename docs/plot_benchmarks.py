@@ -15,11 +15,15 @@ import os
 
 # The first five slots of the categorical palette, stepped for each surface, and drawn in that
 # order. Validated as a set for both modes: worst adjacent CVD dE 9.1 light, 8.4 dark.
+# fk's purple is not a palette slot: none of the remaining three clears all five in
+# both modes, so it was searched for against them. Its worst pair with any of them is CVD dE
+# 13.4 and normal 18.8 light, 9.7 and 16.5 dark, with 3:1 contrast on both surfaces.
 #
 # Line styles:
 # - Solid: Eager
 # - Dashed: Compiled
 # - Dotted: Triton
+# - Dash-dot: Triton, compiled
 SERIES = {
     "cgenn": ("#2a78d6", "#3987e5", "solid"),
     "cgenn-compiled": ("#2a78d6", "#3987e5", "dashed"),
@@ -27,11 +31,11 @@ SERIES = {
     "rotorch-operators": ("#eda100", "#c98500", "dashed"),
     "rotorch-model": ("#eb6834", "#d95926", "dashed"),
     "rotorch-triton": ("#e87ba4", "#d55181", "dotted"),
+    "fk-eager": ("#663399", "#804db3", "solid"),
+    "fk-model": ("#663399", "#804db3", "dashed"),
+    "fk-triton": ("#663399", "#804db3", "dotted"),
+    "fk-triton-model": ("#663399", "#804db3", "dashdot"),
 }
-
-LABELS = {"cgenn": "cgenn", "cgenn-compiled": "cgenn-compiled", "rotorch": "rotorch",
-          "rotorch-operators": "rotorch-operators", "rotorch-model": "rotorch-model",
-          "rotorch-triton": "rotorch-triton"}
 
 WIDTH, HEIGHT = 760, 440
 LEFT, RIGHT, TOP, BOTTOM = 64, 158, 72, 52  # Room for the tick labels, the end labels, the legend.
@@ -86,7 +90,7 @@ def table(best, device, field, unit, decimals, caption, path):
 
     out = [f'<div class="bench-table">', TABLE_STYLE, f'<table><caption>{caption}</caption>',
            '<thead><tr><th>batch size</th>']
-    out += [f'<th class="{c}">{LABELS[c]}</th>' for c in configs]
+    out += [f'<th class="{c}">{c}</th>' for c in configs]
     out.append('</tr></thead><tbody>')
     for b in batches:
         cgenn = best.get((device, "cgenn", b), {}).get(field)
@@ -151,13 +155,14 @@ def chart(best, device, field, unit, title, path):
 
     legend_x, legend_y = LEFT, TOP - 54
     for config in configs:  # The legend is always there; the end labels repeat it on the line.
-        width = 34 + 7.2 * len(LABELS[config])
+        width = 34 + 7.2 * len(config)
         if legend_x + width > WIDTH - RIGHT:
             legend_x, legend_y = LEFT, legend_y + 18
-        out.append(f'<rect class="swatch {config}" x="{legend_x}" y="{legend_y}" width="22" '
-                   f'height="3" rx="1.5"/>')
+        # Drawn in the line's own style, since a family of runs shares one colour.
+        out.append(f'<line class="line {config} {SERIES[config][2]}" x1="{legend_x}" y1="{legend_y + 1.5}" '
+                   f'x2="{legend_x + 22}" y2="{legend_y + 1.5}"/>')
         out.append(f'<text class="legend" x="{legend_x + 28}" y="{legend_y + 6}">'
-                   f'{LABELS[config]}</text>')
+                   f'{config}</text>')
         legend_x += width
 
     ends = []
@@ -168,12 +173,12 @@ def chart(best, device, field, unit, title, path):
         out.append(f'<polyline class="line {config} {linestyle}" points="{line}"/>')
         for b, v in series:
             out.append(f'<circle class="dot {config}" cx="{x_of(b):.1f}" cy="{y_of(v):.1f}" '
-                       f'r="4"><title>{LABELS[config]} · batch {b} · '
+                       f'r="4"><title>{config} · batch {b} · '
                        f'{v:,.1f} {unit}</title></circle>')
         ends.append((y_of(series[-1][1]), x_of(series[-1][0]), config))
 
     for y, x, config in declutter(ends):
-        out.append(f'<text class="end" x="{x + 12:.1f}" y="{y + 4:.1f}">{LABELS[config]}</text>')
+        out.append(f'<text class="end" x="{x + 12:.1f}" y="{y + 4:.1f}">{config}</text>')
 
     out.append("</svg>")
     with open(path, "w", encoding="utf-8") as handle:
@@ -181,51 +186,34 @@ def chart(best, device, field, unit, title, path):
     print(f"wrote {path}")
 
 
-STYLE = """<style>
-.viz { font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --ink: #0b0b0b; --ink-2: #52514e; --grid: #e7e7e4; --surface: #ffffff;
-  --cgenn: #2a78d6; --cgenn-compiled: #2a78d6; --rotorch: #1baf7a;
-  --rotorch-operators: #eda100; --rotorch-model: #eb6834;
-  --rotorch-triton: #e87ba4; }
-.viz .grid { stroke: var(--grid); stroke-width: 1; }
-.viz .tick { fill: var(--ink-2); font-size: 11px; font-variant-numeric: tabular-nums; }
-.viz .axis { fill: var(--ink-2); font-size: 11px; }
-.viz .legend { fill: var(--ink); font-size: 12px; }
-.viz .end { fill: var(--ink-2); font-size: 11px; }
-.viz .line { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.viz .line.dashed { stroke-dasharray: 6 4; }
-.viz .line.dotted { stroke-dasharray: 2 3; }
-.viz .dot { stroke: var(--surface); stroke-width: 2; }
-.viz .cgenn { stroke: var(--cgenn); } .viz circle.cgenn { fill: var(--cgenn); }
-.viz rect.cgenn { fill: var(--cgenn); }
-.viz .cgenn-compiled { stroke: var(--cgenn-compiled); }
-.viz circle.cgenn-compiled, .viz rect.cgenn-compiled { fill: var(--cgenn-compiled); }
-.viz .rotorch { stroke: var(--rotorch); }
-.viz circle.rotorch, .viz rect.rotorch { fill: var(--rotorch); }
-.viz .rotorch-operators { stroke: var(--rotorch-operators); }
-.viz circle.rotorch-operators, .viz rect.rotorch-operators { fill: var(--rotorch-operators); }
-.viz .rotorch-model { stroke: var(--rotorch-model); }
-.viz circle.rotorch-model, .viz rect.rotorch-model { fill: var(--rotorch-model); }
-.viz .rotorch-triton { stroke: var(--rotorch-triton); }
-.viz circle.rotorch-triton, .viz rect.rotorch-triton { fill: var(--rotorch-triton); }
-@media (prefers-color-scheme: dark) {
-  :root:where(:not([data-theme="light"])) .viz, body:where(:not([data-theme="light"])) .viz {
-    --ink: #ffffff; --ink-2: #c3c2b7; --grid: #2b2c2f; --surface: #131416;
-    --cgenn: #3987e5; --cgenn-compiled: #3987e5; --rotorch: #199e70;
-    --rotorch-operators: #c98500; --rotorch-model: #d95926;
-    --rotorch-triton: #d55181; } }
-:root[data-theme="dark"] .viz, body[data-theme="dark"] .viz {
-  --ink: #ffffff; --ink-2: #c3c2b7; --grid: #2b2c2f; --surface: #131416;
-  --cgenn: #3987e5; --cgenn-compiled: #3987e5; --rotorch: #199e70;
-  --rotorch-operators: #c98500; --rotorch-model: #d95926;
-  --rotorch-triton: #d55181; }
-</style>"""
-
-# The same palette as STYLE, so a column header matches the colour of its line in the chart
-# above it. Built from SERIES rather than repeated by hand, so the two cannot drift apart.
+# The palette as css custom properties for each surface, shared by the charts and the tables, so
+# that a column header matches the colour of its line in the chart above it. Built from SERIES
+# rather than repeated by hand, so the two cannot drift apart.
 _LIGHT_VARS = "; ".join(f"--{c}: {SERIES[c][0]}" for c in SERIES)
 _DARK_VARS = "; ".join(f"--{c}: {SERIES[c][1]}" for c in SERIES)
+_SERIES_RULES = "\n".join(f".viz .{c} {{ stroke: var(--{c}); }} .viz circle.{c} {{ fill: var(--{c}); }}" for c in SERIES)
 _HEADER_COLORS = "\n".join(f'.bench-table th.{c} {{ color: var(--{c}); }}' for c in SERIES)
+
+STYLE = f"""<style>
+.viz {{ font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --ink: #0b0b0b; --ink-2: #52514e; --grid: #e7e7e4; --surface: #ffffff; {_LIGHT_VARS}; }}
+.viz .grid {{ stroke: var(--grid); stroke-width: 1; }}
+.viz .tick {{ fill: var(--ink-2); font-size: 11px; font-variant-numeric: tabular-nums; }}
+.viz .axis {{ fill: var(--ink-2); font-size: 11px; }}
+.viz .legend {{ fill: var(--ink); font-size: 12px; }}
+.viz .end {{ fill: var(--ink-2); font-size: 11px; }}
+.viz .line {{ fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }}
+.viz .line.dashed {{ stroke-dasharray: 6 4; }}
+.viz .line.dotted {{ stroke-dasharray: 2 3; }}
+.viz .line.dashdot {{ stroke-dasharray: 6 3 1 3; }}
+.viz .dot {{ stroke: var(--surface); stroke-width: 2; }}
+{_SERIES_RULES}
+@media (prefers-color-scheme: dark) {{
+  :root:where(:not([data-theme="light"])) .viz, body:where(:not([data-theme="light"])) .viz {{
+    --ink: #ffffff; --ink-2: #c3c2b7; --grid: #2b2c2f; --surface: #131416; {_DARK_VARS}; }} }}
+:root[data-theme="dark"] .viz, body[data-theme="dark"] .viz {{
+  --ink: #ffffff; --ink-2: #c3c2b7; --grid: #2b2c2f; --surface: #131416; {_DARK_VARS}; }}
+</style>"""
 
 TABLE_STYLE = f"""<style>
 .bench-table {{ {_LIGHT_VARS}; --ink: #0b0b0b; --ink-2: #52514e; --border: #e7e7e4; }}
@@ -254,7 +242,7 @@ def describe(points, unit):
     ends = {c: series[-1] for c, series in points.items()}
     batch = max(b for b, _ in ends.values())
     return ("Log-log lines, one per run, against batch size. At batch " + str(batch) + ": "
-            + ", ".join(f"{LABELS[c]} {v:,.0f} {unit}" + ("" if b == batch else f" (at batch {b})")
+            + ", ".join(f"{c} {v:,.0f} {unit}" + ("" if b == batch else f" (at batch {b})")
                         for c, (b, v) in sorted(ends.items(), key=lambda item: item[1][1])) + ".")
 
 
