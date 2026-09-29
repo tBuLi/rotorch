@@ -8,15 +8,19 @@ from ...nn.utils import cat, segment_mean
 
 
 class CEMLP(nn.Module):
-    """Clifford equivariant MLP: a stack of linear, nonlinear and product layers."""
+    """
+    Clifford equivariant MLP: a stack of linear, nonlinear and product layers.
+
+    :param layer: what holds the modules of a layer; :class:`~rotorch.nn.cgenn.fused.CEMLPLayer` computes them as one operator.
+    """
 
     def __init__(self, in_features, hidden_features, out_features, n_layers=2,
-                 normalization_init=0):
+                 normalization_init=0, layer=nn.Sequential):
         super().__init__()
 
         features = [in_features] + [hidden_features] * (n_layers - 1) + [out_features]
         self.layers = nn.Sequential(*(
-            nn.Sequential(
+            layer(
                 MVLinear(i, o),
                 MVSiLU(),
                 GeometricProduct(o, normalization_init=normalization_init),

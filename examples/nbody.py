@@ -3,6 +3,7 @@ Predict where charged particles end up, the nbody example of cgenn.
 
     python examples/nbody.py
     python examples/nbody.py --impl fk
+    python examples/nbody.py --impl fused --backend triton
     python examples/nbody.py --impl cgenn
 
 cgenn reads this dataset from the files the EGNN repository ships. This one is simulated here
@@ -88,6 +89,15 @@ def fk(args):
     return rotorch(args, NBodyCGGNN)
 
 
+def fused(args):
+    """The same network with every layer of its MLPs one kingdon operator, :func:`~rotorch.nn.cgenn.fused.cemlp_layer`: under --backend triton one kernel forward and one backward."""
+    from functools import partial
+    from rotorch.models.cgenn import CEMLP, NBodyCGGNN
+    from rotorch.nn.cgenn.fused import CEMLPLayer
+
+    return rotorch(args, partial(NBodyCGGNN, mlp=partial(CEMLP, layer=CEMLPLayer)))
+
+
 def cgenn(args):
     from models.nbody_cggnn import NBodyCGGNN
 
@@ -100,7 +110,7 @@ def cgenn(args):
 
 
 task = benchmark.Task(name="nbody", generate=generate,
-                      models=dict(rotorch=rotorch, fk=fk, cgenn=cgenn),
+                      models=dict(rotorch=rotorch, fk=fk, fused=fused, cgenn=cgenn),
                       defaults=dict(hidden_features=28, num_layers=3, batch_size=100,
                                     train_samples=3000, val_samples=512))
 

@@ -23,7 +23,7 @@ from torch.utils.data import DataLoader, TensorDataset
 REFERENCES = dict(cgenn="clifford-group-equivariant-neural-networks",
                   gatr="geometric-algebra-transformer")
 # The implementations rotorch builds out of kingdon operators, which is what --backend and --compile operators are about.
-KINGDON = ("rotorch", "fk")
+KINGDON = ("rotorch", "fk", "fused")
 
 
 @dataclass
@@ -54,8 +54,11 @@ def mse_loss(prediction: MultiVector, target: MultiVector) -> torch.Tensor:
 
 
 def codegen(args):
-    """Keyword arguments for :class:`Algebra`: which backend, and whether to compile."""
-    kwargs = dict(backend=args.backend)
+    """
+    Keyword arguments for :class:`Algebra`: which backend, and whether to compile. And a simp_func that drops the zeros but rewrites nothing else:
+    the default expands every coefficient, which multiplies out the gated products of an operator over sympy symbols.
+    """
+    kwargs = dict(backend=args.backend, simp_func=lambda v: v)
     if args.compile == "operators":
         kwargs["wrapper"] = torch.compile
     return kwargs
