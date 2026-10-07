@@ -3,7 +3,7 @@ from kingdon import MultiVector
 
 from .linear import EquiLinear
 from .utils import join
-from ..utils import cat, register
+from ..utils import cat
 
 
 class GeometricBilinear(nn.Module):
@@ -37,5 +37,5 @@ class GeometricBilinear(nn.Module):
         join_left, _ = self.linear_join_left(input, scalars)
         join_right, _ = self.linear_join_right(input, scalars)
 
-        joined = register(input.algebra, join)(join_left, join_right, reference)
+        joined = join(join_left, join_right, reference)
         return self.linear_out(cat([left * right, joined]), scalars)

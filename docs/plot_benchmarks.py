@@ -15,15 +15,11 @@ import os
 
 # The first five slots of the categorical palette, stepped for each surface, and drawn in that
 # order. Validated as a set for both modes: worst adjacent CVD dE 9.1 light, 8.4 dark.
-# fk's purple is not a palette slot: none of the remaining three clears all five in
-# both modes, so it was searched for against them. Its worst pair with any of them is CVD dE
-# 13.4 and normal 18.8 light, 9.7 and 16.5 dark, with 3:1 contrast on both surfaces.
 #
 # Line styles:
 # - Solid: Eager
 # - Dashed: Compiled
 # - Dotted: Triton
-# - Dash-dot: Triton, compiled
 SERIES = {
     "cgenn": ("#2a78d6", "#3987e5", "solid"),
     "cgenn-compiled": ("#2a78d6", "#3987e5", "dashed"),
@@ -31,10 +27,6 @@ SERIES = {
     "rotorch-operators": ("#eda100", "#c98500", "dashed"),
     "rotorch-model": ("#eb6834", "#d95926", "dashed"),
     "rotorch-triton": ("#e87ba4", "#d55181", "dotted"),
-    "fk-eager": ("#663399", "#804db3", "solid"),
-    "fk-model": ("#663399", "#804db3", "dashed"),
-    "fk-triton": ("#663399", "#804db3", "dotted"),
-    "fk-triton-model": ("#663399", "#804db3", "dashdot"),
 }
 
 WIDTH, HEIGHT = 760, 440
@@ -205,7 +197,6 @@ STYLE = f"""<style>
 .viz .line {{ fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }}
 .viz .line.dashed {{ stroke-dasharray: 6 4; }}
 .viz .line.dotted {{ stroke-dasharray: 2 3; }}
-.viz .line.dashdot {{ stroke-dasharray: 6 3 1 3; }}
 .viz .dot {{ stroke: var(--surface); stroke-width: 2; }}
 {_SERIES_RULES}
 @media (prefers-color-scheme: dark) {{

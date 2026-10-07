@@ -1,7 +1,8 @@
 import einops
 import kingdon.einops_backend  # noqa: F401  Registers MultiVector with einops.
+import sympy
 import torch
-from kingdon import MultiVector
+from kingdon import MultiVector, add_operator
 
 EPS = 1e-6
 
@@ -37,17 +38,6 @@ def insert_out_features(X: MultiVector) -> MultiVector:
     return einops.rearrange(materialize_constants(X), "... f -> ... 1 f")
 
 
-def grade_of_blades(mv: MultiVector) -> torch.Tensor:
-    """
-    For every blade of `mv`, the index of its grade among the grades present, so that a layer
-    can hold one parameter per grade and still apply them all in one go.
-
-    Made on the device of `mv`: a lazy layer sizes itself on its first input, after the model has been moved, and an index left on the cpu is copied over on every use, waiting for the card each time.
-    """
-    index = {g: i for i, g in enumerate(mv.grades)}
-    return torch.tensor([index[k.bit_count()] for k in mv.keys()], device=getattr(mv.values(), "device", None))
-
-
 def degenerate(algebra) -> MultiVector | None:
     """
     The basis vector that squares to zero, or nothing at all in an algebra where every basis
@@ -63,18 +53,7 @@ def degenerate(algebra) -> MultiVector | None:
     return MultiVector.fromkeysvalues(algebra, (key,), [1])
 
 
-def register(algebra, expr, **kwargs):
-    """
-    Compile `expr` for `algebra`, or hand back the operator registered under its name
-    before, since registering anew would drop the codegen cached on it. The name of
-    `expr` therefore has to be unique within `algebra.registry`. Any keyword arguments
-    are passed on to :meth:`~kingdon.algebra.Algebra.add_operator`.
-    """
-    if expr.__name__ not in algebra.registry:
-        algebra.add_operator(expr, symbolic=True, **kwargs)
-    return algebra.registry[expr.__name__]
-
-
+@add_operator(symbolic=True)
 def scalar_normsq(X: MultiVector) -> MultiVector:
     """Scalar part of X times its reverse, unlike kingdon's normsq which keeps all grades."""
     return (~X * X).grade(0)
@@ -82,7 +61,7 @@ def scalar_normsq(X: MultiVector) -> MultiVector:
 
 def mag2(X: MultiVector):
     """Squared magnitude of the single grade multivector X. Zero for null blades."""
-    return sum(register(X.algebra, scalar_normsq)(X).values())
+    return sum(scalar_normsq(X).values())
 
 
 def norm(X: MultiVector):
@@ -94,19 +73,20 @@ def _root(squared):
     return (squared ** 2 + 1e-16) ** 0.25
 
 
+class sigmoid(sympy.Function):
+    """The logistic function, printed as one torch.sigmoid rather than a negation, an exp, a sum and a reciprocal, each a node for autograd."""
+
+    def fdiff(self, argindex=1):
+        return self * (1 - self)
+
+    def _torchcode(self, printer):
+        return f"torch.sigmoid({printer._print(self.args[0])})"
+
+
+@add_operator(symbolic=True)
 def gradewise_normsq(X: MultiVector) -> tuple[MultiVector, ...]:
     """:func:`scalar_normsq` of every grade of X, as one operator rather than one per grade."""
     return tuple(scalar_normsq(X.grade(g)) for g in X.grades)
-
-
-def grade_mag2(X: MultiVector) -> list:
-    """:func:`mag2` of every grade of X."""
-    return [mv.e for mv in register(X.algebra, gradewise_normsq)(X)]
-
-
-def grade_norm(X: MultiVector) -> list:
-    """:func:`norm` of every grade of X."""
-    return [_root(m) for m in grade_mag2(X)]
 
 
 def invariants(X: MultiVector) -> MultiVector:
@@ -115,5 +95,5 @@ def invariants(X: MultiVector) -> MultiVector:
     squared magnitude of every other grade, neither of which the group can see.
     """
     X = materialize_constants(X)
-    per_grade = torch.broadcast_tensors(*(X.e if g == 0 else m for g, m in zip(X.grades, grade_mag2(X))))
+    per_grade = torch.broadcast_tensors(*(X.e if g == 0 else m.e for g, m in zip(X.grades, gradewise_normsq(X))))
     return X.algebra.scalar(e=einops.rearrange(torch.stack(per_grade), "grade ... feature -> ... (feature grade)"))

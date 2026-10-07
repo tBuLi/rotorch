@@ -1,17 +1,35 @@
 import math
 
-import einops
-import kingdon.einops_backend  # noqa: F401  Registers MultiVector with einops.
+import sympy
 import torch
+from einops import einsum
 from torch.nn.modules.lazy import LazyModuleMixin
 from torch.nn.parameter import UninitializedParameter
 from torch import nn
-from kingdon import MultiVector
+from kingdon import MultiVector, add_operator
+from kingdon.multivector import Scalar
 
-from .gp import number_of_weights_wgp, wgp
-from .linear import MVLinear
-from .normalization import NormalizationLayer
-from ..utils import insert_out_features, register
+from .gp import number_of_weights_wgp, paths
+from .linear import MVLinear, gradewise_linear
+from .normalization import NormalizationLayer, normalize
+from ..utils import materialize_constants
+
+
+def fc_wgp(X: MultiVector, Y: MultiVector, w: Scalar[None]) -> MultiVector:
+    """:func:`~rotorch.nn.cgenn.gp.wgp` with w[k] the matrix that mixes the features of the k-th path."""
+    return sum(einsum(Z, w[k], "... i, o i -> ... o") for k, Z in enumerate(paths(X, Y)))
+
+
+@add_operator(symbolic=True, codegen_symbolcls=sympy.Symbol)
+def fc_geometric_product(X: MultiVector, Wr: Scalar[None], n: Scalar[None], Wl: Scalar[None], bl, w: Scalar[None]) -> MultiVector:
+    """:class:`FullyConnectedGeometricProduct`."""
+    return (gradewise_linear(X, Wl, bl) + fc_wgp(X, normalize(gradewise_linear(X, Wr), n), w)) / math.sqrt(2)
+
+
+@add_operator(symbolic=True, codegen_symbolcls=sympy.Symbol)
+def fc_geometric_product_unnormalized(X: MultiVector, Wr: Scalar[None], Wl: Scalar[None], bl, w: Scalar[None]) -> MultiVector:
+    """:class:`FullyConnectedGeometricProduct` without its normalization."""
+    return (gradewise_linear(X, Wl, bl) + fc_wgp(X, gradewise_linear(X, Wr), w)) / math.sqrt(2)
 
 
 class FullyConnectedGeometricProduct(LazyModuleMixin, nn.Module):
@@ -22,31 +40,27 @@ class FullyConnectedGeometricProduct(LazyModuleMixin, nn.Module):
 
     weight: UninitializedParameter
 
-    def __init__(self, in_features, out_features, include_first_order=True, normalization_init=0):
+    def __init__(self, in_features, out_features, normalization_init=0):
         super().__init__()
-        self.wgp = None
         self.in_features = in_features
         self.out_features = out_features
-        self.include_first_order = include_first_order
         self.weight = UninitializedParameter()
-        if normalization_init is not None:
-            self.normalization = NormalizationLayer(normalization_init)
-        else:
-            self.normalization = nn.Identity()
+        self.normalization = NormalizationLayer(normalization_init) if normalization_init is not None else None
         self.linear_right = MVLinear(in_features, in_features, bias=False)
-        if include_first_order:
-            self.linear_left = MVLinear(in_features, out_features, bias=True)
+        self.linear_left = MVLinear(in_features, out_features)
 
     def initialize_parameters(self, input: MultiVector):
         if not self.has_uninitialized_params():
             return
 
         self.algebra = input.algebra
-        self.wgp = register(self.algebra, wgp)
+        # The layer is one operator, so its modules are never run: each is sized on the input, whose keys and features are those of what it takes.
+        for module in (self.linear_right, self.normalization, self.linear_left):
+            if module is not None:
+                module.initialize_parameters(input)
 
         with torch.no_grad():
-            n_weights = number_of_weights_wgp(input, input)
-            self.weight.materialize((n_weights, self.out_features, self.in_features))
+            self.weight.materialize((number_of_weights_wgp(input, input), self.out_features, self.in_features))
             self.reset_parameters()
 
     def reset_parameters(self):
@@ -54,14 +68,8 @@ class FullyConnectedGeometricProduct(LazyModuleMixin, nn.Module):
         torch.nn.init.normal_(self.weight, std=std)
 
     def forward(self, input: MultiVector) -> MultiVector:
-        input_right = self.linear_right(input)
-        input_right = self.normalization(input_right)
-        weights = self.algebra.scalar(e=self.weight)
-
-        product = self.wgp(insert_out_features(input), insert_out_features(input_right), weights)
-        product = einops.reduce(product, "... o f -> ... o", "sum")  # Contract the input features.
-
-        if self.include_first_order:
-            return (self.linear_left(input) + product) / math.sqrt(2)
-        else:
-            return product
+        input = materialize_constants(input)
+        normalization = () if self.normalization is None else (self.normalization.a,)
+        product = fc_geometric_product if normalization else fc_geometric_product_unnormalized
+        params = self.linear_right.weight, *normalization, self.linear_left.weight, self.linear_left.bias, self.weight
+        return product(input, *(input.algebra.scalar(e=p) for p in params))

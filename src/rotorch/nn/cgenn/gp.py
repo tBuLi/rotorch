@@ -1,38 +1,40 @@
 import itertools
 import math
 
+import sympy
+import torch
 from torch.nn.modules.lazy import LazyModuleMixin
 from torch.nn.parameter import UninitializedParameter
 from torch import nn
-import torch
-from kingdon import MultiVector
+from kingdon import MultiVector, add_operator
+from kingdon.multivector import Scalar
 
-from .linear import MVLinear
-from .normalization import NormalizationLayer
-from ..utils import register
+from .linear import MVLinear, gradewise_linear
+from .normalization import NormalizationLayer, normalize
+from ..utils import materialize_constants
+
+
+def paths(X: MultiVector, Y: MultiVector):
+    """Every grade of X times every grade of Y, split into the grades of the product: what a weighted geometric product gives a weight each."""
+    for gx, gy in itertools.product(X.grades, Y.grades):
+        Z = X.grade(gx) * Y.grade(gy)
+        yield from (Z.grade(gz) for gz in Z.grades)
 
 
 def number_of_weights_wgp(X: MultiVector, Y: MultiVector) -> int:
-    i = 0
-    for gx, gy in itertools.product(X.grades, Y.grades):
-        Z = X.grade(gx) * Y.grade(gy)
-        i += len(Z.grades)
-    return i
+    return sum(1 for _ in paths(X, Y))
+
 
 def wgp(X: MultiVector, Y: MultiVector, weights: MultiVector[None]) -> MultiVector:
-    """
-    Compute the weighted geometric product between X and Y.
-    The multivectors are mutiplied grade-wise, and a unique weight
-    is applied to each grade in the output.
-    """
-    tot = 0
-    i = 0
-    for gx, gy in itertools.product(X.grades, Y.grades):
-        Z = X.grade(gx) * Y.grade(gy)
-        for gz in Z.grades:
-            tot += weights[i] * Z.grade(gz)
-            i += 1
-    return tot
+    """The geometric product of X and Y, with a weight for each of its :func:`paths`."""
+    return sum(weights[k] * Z for k, Z in enumerate(paths(X, Y)))
+
+
+@add_operator(symbolic=True, codegen_symbolcls=sympy.Symbol)
+def geometric_product(X: MultiVector, Wr: Scalar[None], n: Scalar[None], Wl: Scalar[None], bl, w: Scalar[None]) -> MultiVector:
+    """:class:`GeometricProduct`."""
+    return (gradewise_linear(X, Wl, bl) + wgp(X, normalize(gradewise_linear(X, Wr), n), w)) / math.sqrt(2)
+
 
 class GeometricProduct(LazyModuleMixin, nn.Module):
     """
@@ -44,26 +46,22 @@ class GeometricProduct(LazyModuleMixin, nn.Module):
 
     weight: UninitializedParameter
 
-    def __init__(self, features, include_first_order=True, normalization_init=0):
+    def __init__(self, features, normalization_init=0):
         super().__init__()
-        self.wgp = None
         self.features = features
-        self.include_first_order = include_first_order
         self.weight = UninitializedParameter()
-        if normalization_init is not None:
-            self.normalization = NormalizationLayer(normalization_init)
-        else:
-            self.normalization = nn.Identity()
+        self.normalization = NormalizationLayer(normalization_init)
         self.linear_right = MVLinear(features, features, bias=False)
-        if include_first_order:
-            self.linear_left = MVLinear(features, features, bias=True)
+        self.linear_left = MVLinear(features, features)
 
     def initialize_parameters(self, input: MultiVector):
         if not self.has_uninitialized_params():
             return
 
         self.algebra = input.algebra
-        self.wgp = register(self.algebra, wgp)
+        # The layer is one operator, so its modules are never run: each is sized on the input, whose keys and features are those of what it takes.
+        for module in (self.linear_right, self.normalization, self.linear_left):
+            module.initialize_parameters(input)
 
         with torch.no_grad():
             self.weight.materialize((number_of_weights_wgp(input, input), self.features))
@@ -73,11 +71,6 @@ class GeometricProduct(LazyModuleMixin, nn.Module):
         torch.nn.init.normal_(self.weight, std=1 / math.sqrt(self.algebra.d + 1))
 
     def forward(self, input: MultiVector) -> MultiVector:
-        input_right = self.linear_right(input)
-        input_right = self.normalization(input_right)
-        weights = self.algebra.scalar(e=self.weight)
-
-        if self.include_first_order:
-            return (self.linear_left(input) + self.wgp(input, input_right, weights)) / math.sqrt(2)
-        else:
-            return self.wgp(input, input_right, weights)
+        input = materialize_constants(input)
+        params = self.linear_right.weight, self.normalization.a, self.linear_left.weight, self.linear_left.bias, self.weight
+        return geometric_product(input, *(input.algebra.scalar(e=p) for p in params))

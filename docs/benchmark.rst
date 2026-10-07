@@ -11,33 +11,24 @@ schedule and the same optimizer, and only the layers underneath differ::
     python examples/hulls.py --compile model       # torch.compile over the whole model
     python examples/hulls.py --backend triton      # one triton kernel per operator, cuda only
     python examples/hulls.py --impl cgenn          # the original implementation
-    python examples/nbody.py --impl fk             # n-body with flash-clifford's layers
 
 The runs below are:
 
 :cgenn: the cgenn implementation, unoptimized.
 :cgenn-compiled: the entire cgenn model through :func:`torch.compile`. It has graph breaks,
    since it indexes its weights with a boolean mask whose result has a data dependent shape.
-:rotorch: the rotorch example, unoptimized.
+:rotorch: the rotorch example, unoptimized. In the cgenn examples every layer is one kingdon operator,
+   its linear maps, gates, product and normalization included.
 :rotorch-operators: hands :func:`torch.compile` to kingdon as its wrapper, so every operator
    kingdon generates for the algebra is compiled on its own.
 :rotorch-model: compiles the training step as a whole, fusing across those operators rather
    than stopping at each one. **One graph, no breaks**, and :code:`fullgraph=True` succeeds.
-:rotorch-triton: hands kingdon a code printer that emits a triton kernel per operator directly,
-   instead of applying :func:`torch.compile` to its torch calls. cuda only.
+:rotorch-triton: hands kingdon a code printer that emits every operator as one triton kernel forward
+   and one backward, instead of applying :func:`torch.compile` to its torch calls. cuda only.
 :rotorch-triton-model: those triton kernels, with the model compiled around them. Stacking the
    two does not help: :code:`--backend triton` and :code:`--compile model` already solve the same
    problem, fusing across operators rather than launching each one, so there is no further
    speed-up to have and this configuration is left out of the tables and figures below.
-:fk-eager: n-body only: cgenn's network with the layer of `Flash Clifford
-   <https://github.com/maxxxzdn/flash-clifford>`_ (Zhdanov, 2025) in its MLPs, which flash-clifford
-   offers as their faster replacement, built by rotorch out of kingdon operators (:code:`--impl fk`). The layer's
-   GELU gates and weighted geometric product are one kingdon operator, as they are one kernel in
-   flash-clifford. It is a different architecture from cgenn's, so these columns are told apart
-   from rotorch's own, though they are measured against cgenn like everything else here.
-:fk-triton, fk-model, fk-triton-model: the same, run the way the
-   rotorch columns of those names are. Under :code:`--backend triton` that operator is one kernel
-   forward and one backward, printed by kingdon rather than written by hand.
 
 Everything here was measured by :code:`examples/sweep.py` on one machine: an **NVIDIA RTX
 A4000** (16 GB) beside an **AMD Ryzen Threadripper PRO 7955WX**, Windows 11, torch 2.14 with
@@ -360,8 +351,7 @@ on the card, where 2048 is as far as the cpu is worth taking.
       there is twenty times more of everything per sample and this is expected to be the one
       example that fills the card. The dataset is simulated by the example rather than read from
       the files the EGNN repository ships, so the physics is cgenn's and the trajectories are
-      not. This example also runs the fk columns: flash-clifford says its layer is
-      the layer of this network's MLPs made fast, but ships no network to put it in.
+      not.
 
       Not swept yet.
 

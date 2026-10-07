@@ -22,8 +22,6 @@ from torch.utils.data import DataLoader, TensorDataset
 # names double as the names of the options that point at those checkouts.
 REFERENCES = dict(cgenn="clifford-group-equivariant-neural-networks",
                   gatr="geometric-algebra-transformer")
-# The implementations rotorch builds out of kingdon operators, which is what --backend and --compile operators are about.
-KINGDON = ("rotorch", "fk", "fused")
 
 
 @dataclass
@@ -54,11 +52,8 @@ def mse_loss(prediction: MultiVector, target: MultiVector) -> torch.Tensor:
 
 
 def codegen(args):
-    """
-    Keyword arguments for :class:`Algebra`: which backend, and whether to compile. And a simp_func that drops the zeros but rewrites nothing else:
-    the default expands every coefficient, which multiplies out the gated products of an operator over sympy symbols.
-    """
-    kwargs = dict(backend=args.backend, simp_func=lambda v: v)
+    """Keyword arguments for :class:`Algebra`: which backend, and whether to compile."""
+    kwargs = dict(backend=args.backend)
     if args.compile == "operators":
         kwargs["wrapper"] = torch.compile
     return kwargs
@@ -201,8 +196,8 @@ def run(task):
     parser.add_argument("--data-dir", default=None)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--backend", choices=["torch", "triton"], default="torch",
-                        help="how kingdon emits its operators: one torch call per symbolic "
-                             "multiply, or one triton kernel per operator")
+                        help="how kingdon emits its operators: as torch calls, or each as "
+                             "one triton kernel forward and one backward")
     parser.add_argument("--compile", choices=["none", "operators", "model"], default="none",
                         help="compile every operator kingdon generates, which hands torch.compile "
                              "to kingdon as its wrapper, or the model as a whole")
@@ -212,7 +207,7 @@ def run(task):
     parser.set_defaults(**task.defaults)
     parser.set_defaults(**task.model_defaults.get(parser.parse_known_args()[0].impl, {}))
     args = parser.parse_args()
-    if args.impl not in KINGDON and (args.compile == "operators" or args.backend != "torch"):
+    if args.impl != "rotorch" and (args.compile == "operators" or args.backend != "torch"):
         raise SystemExit("--backend and --compile operators are about the operators kingdon "
-                         f"generates, so {' and '.join(KINGDON)} only.")
+                         "generates, so rotorch only.")
     train(args, task)

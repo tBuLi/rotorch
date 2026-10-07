@@ -13,7 +13,7 @@ import torch
 
 import benchmark
 from rotorch.nn.gatr.utils import join_normsq
-from rotorch.nn.utils import mag2, register
+from rotorch.nn.utils import mag2
 
 N_PLANETS, DIM = 5, 3
 DT, STEPS = 0.001, 100
@@ -80,7 +80,7 @@ def rotorch(args):
         # The join of two points is the line through them and its magnitude is how far apart they
         # are, once the prediction is divided by the weight it puts on itself. Nothing holds that
         # weight to one, which the regularization is there to do.
-        distance = register(algebra, join_normsq)(prediction, target).e / mag2(prediction).clamp(min=1e-6)
+        distance = join_normsq(prediction, target).e / mag2(prediction).clamp(min=1e-6)
         return distance.mean() + 0.01 * regularization.e.mean()
 
     return model, loss_fn

@@ -1,6 +1,6 @@
-from kingdon import MultiVector
+from kingdon import MultiVector, add_operator
 
-from ..utils import degenerate, register
+from ..utils import degenerate
 
 
 def weight(X: MultiVector) -> MultiVector:
@@ -11,6 +11,7 @@ def weight(X: MultiVector) -> MultiVector:
     return (degenerate(X.algebra) & X).grade(0)
 
 
+@add_operator(symbolic=True)
 def join(X: MultiVector, Y: MultiVector, Z: MultiVector) -> MultiVector:
     """
     The join of X and Y, weighed by the reference Z. The join alone turns with the rotors but
@@ -23,6 +24,7 @@ def join(X: MultiVector, Y: MultiVector, Z: MultiVector) -> MultiVector:
     return (X & Y) * weight(Z)
 
 
+@add_operator(symbolic=True)
 def scalar_product(X: MultiVector, Y: MultiVector) -> MultiVector:
     """
     The inner product GATr attends by. Blades along the degenerate vector square to zero, so they
@@ -31,6 +33,7 @@ def scalar_product(X: MultiVector, Y: MultiVector) -> MultiVector:
     return (~X * Y).grade(0)
 
 
+@add_operator(symbolic=True)
 def join_normsq(X: MultiVector, Y: MultiVector) -> MultiVector:
     """
     Squared magnitude of the join, which for two unit points is the square of the distance between
@@ -41,4 +44,4 @@ def join_normsq(X: MultiVector, Y: MultiVector) -> MultiVector:
 
 def inner(X: MultiVector, Y: MultiVector):
     """The inner product of X and Y as a number, the way :func:`~rotorch.nn.utils.mag2` is one."""
-    return register(X.algebra, scalar_product)(X, Y).e
+    return scalar_product(X, Y).e

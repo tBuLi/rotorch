@@ -10,10 +10,11 @@ and hands both back. The two meet only on the scalar blade, the one place the gr
 them apart.
 """
 
-from .attention import GeometricAttention, SelfAttention
+from .attention import GeometricAttention, SelfAttention, packed_features
 from .bilinear import GeometricBilinear
 from .block import GATrBlock
 from .layernorm import EquiLayerNorm
-from .linear import EquiLinear
+from .linear import EquiLinear, equi_linear, equivariant_maps
 from .mlp import GeoMLP
 from .nonlinearity import ScalarGatedNonlinearity
+from .utils import inner, join, join_normsq, scalar_product, weight

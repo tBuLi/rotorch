@@ -4,9 +4,9 @@ The layers of `Clifford Group Equivariant Neural Networks
 written against kingdon multivectors rather than a dense array of all :math:`2^n` blades.
 """
 
-from .gp import GeometricProduct
-from .fcgp import FullyConnectedGeometricProduct
-from .linear import MVLinear
-from .mvlayernorm import MVLayerNorm
-from .mvsilu import MVSiLU
-from .normalization import NormalizationLayer
+from .gp import GeometricProduct, geometric_product, number_of_weights_wgp, paths, wgp
+from .fcgp import FullyConnectedGeometricProduct, fc_geometric_product, fc_geometric_product_unnormalized, fc_wgp
+from .linear import MVLinear, gradewise_linear, linear
+from .mvlayernorm import MVLayerNorm, layernorm
+from .mvsilu import MVSiLU, mvsilu
+from .normalization import NormalizationLayer, normalize

@@ -8,7 +8,7 @@ from kingdon import MultiVector
 
 from .linear import EquiLinear
 from .utils import inner, join_normsq
-from ..utils import degenerate, mag2, register
+from ..utils import degenerate, mag2
 
 
 def packed_features(X: MultiVector, points: int) -> int:
@@ -46,7 +46,7 @@ class GeometricAttention(nn.Module):
         key = einops.rearrange(k, "... item feature -> ... 1 1 item feature")
 
         alike = inner(query.grade(*others), key.grade(*others))
-        close = register(q.algebra, join_normsq)(query.grade(points), key.grade(points)).e
+        close = join_normsq(query.grade(points), key.grade(points)).e
         close = close * self._dehomogenize(query.grade(points)) * self._dehomogenize(key.grade(points))
         scores = einops.reduce(alike - self.log_weights.exp() * close, "... q k f -> ... q k", "sum")
         scores = scores + einops.einsum(q_s, k_s, "... head q f, ... k f -> ... head q k").e

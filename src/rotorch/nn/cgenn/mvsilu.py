@@ -1,11 +1,18 @@
-import einops
+import sympy
 import torch
 from torch.nn.modules.lazy import LazyModuleMixin
 from torch.nn.parameter import UninitializedParameter
 from torch import nn
-from kingdon import MultiVector
+from kingdon import MultiVector, add_operator
+from kingdon.multivector import Scalar
 
-from ..utils import grade_of_blades, grade_mag2, grade_norm, materialize_constants
+from ..utils import mag2, materialize_constants, sigmoid
+
+
+@add_operator(symbolic=True, codegen_symbolcls=sympy.Symbol)
+def mvsilu(X: MultiVector, a: Scalar[None], b: Scalar[None]) -> MultiVector:
+    """:class:`MVSiLU`."""
+    return sum(X.grade(g) * sigmoid(a[k].e * (X.e if g == 0 else mag2(X.grade(g))) + b[k].e) for k, g in enumerate(X.grades))
 
 
 class MVSiLU(LazyModuleMixin, nn.Module):
@@ -14,10 +21,9 @@ class MVSiLU(LazyModuleMixin, nn.Module):
     a: UninitializedParameter
     b: UninitializedParameter
 
-    def __init__(self, invariant="mag2"):
+    def __init__(self):
         super().__init__()
 
-        self.invariant = {"mag2": grade_mag2, "norm": grade_norm}[invariant]
         self.a = UninitializedParameter()
         self.b = UninitializedParameter()
 
@@ -27,10 +33,8 @@ class MVSiLU(LazyModuleMixin, nn.Module):
 
         with torch.no_grad():
             input = materialize_constants(input)
-            self.grades = input.grades
-            self.register_buffer("blade_grades", grade_of_blades(input))
-            self.a.materialize((len(self.grades), input.shape[-1]))
-            self.b.materialize((len(self.grades), input.shape[-1]))
+            self.a.materialize((len(input.grades), input.shape[-1]))
+            self.b.materialize((len(input.grades), input.shape[-1]))
             self.reset_parameters()
 
     def reset_parameters(self):
@@ -39,8 +43,4 @@ class MVSiLU(LazyModuleMixin, nn.Module):
 
     def forward(self, input: MultiVector) -> MultiVector:
         input = materialize_constants(input)
-        gates = [torch.sigmoid(self.a[i] * (input.e if g == 0 else invariant) + self.b[i])
-                 for i, (g, invariant) in enumerate(zip(self.grades, self.invariant(input)))]
-        gates = torch.stack(torch.broadcast_tensors(*gates))
-        gates = input.algebra.multivector(gates.index_select(0, self.blade_grades), keys=input.keys())
-        return einops.einsum(input, gates, "..., ... -> ...")
+        return mvsilu(input, *(input.algebra.scalar(e=p) for p in (self.a, self.b)))

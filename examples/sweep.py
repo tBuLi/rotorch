@@ -16,9 +16,7 @@ faster run can be kept and so that a compiled run is seen once cold and once war
     python examples/sweep.py --dry-run              # print the plan and stop
 
 Every example is measured against the implementation of its own paper, which for the cgenn
-examples is cgenn and for gravity is GATr, so the reference columns follow the example. Where
-rotorch also builds the architecture of another paper for an example, as the fk
-columns of n-body do, those columns are measured against the same reference.
+examples is cgenn and for gravity is GATr, so the reference columns follow the example.
 
 Each run is a separate process, so one that dies takes its row down and nothing else. The csv
 is appended to as results land and is re-read on startup, so the sweep can be interrupted and
@@ -54,26 +52,20 @@ CONFIGS = {
     "gatr": ["--impl", "gatr"],
     "rotorch": [],
     "rotorch-triton": ["--backend", "triton"],
-    "fk-eager": ["--impl", "fk"],
-    "fk-triton": ["--impl", "fk", "--backend", "triton"],
     "cgenn-compiled": ["--impl", "cgenn", "--compile", "model"],
     "gatr-compiled": ["--impl", "gatr", "--compile", "model"],
     "rotorch-operators": ["--compile", "operators"],
     "rotorch-model": ["--compile", "model"],
     "rotorch-triton-model": ["--backend", "triton", "--compile", "model"],
-    "fk-model": ["--impl", "fk", "--compile", "model"],
-    "fk-triton-model": ["--impl", "fk", "--backend", "triton", "--compile", "model"],
 }
 # Run these first. The eager ones cost nothing to start; triton pays a compile per kernel, which
 # is seconds against the minutes inductor wants for a whole model.
-FIRST = ("cgenn", "gatr", "rotorch", "rotorch-triton", "fk-eager", "fk-triton")
+FIRST = ("cgenn", "gatr", "rotorch", "rotorch-triton")
 
 # The reference every example is measured against, which is the one its own paper ships. An
 # example knows nothing of the others, so asking it for one of theirs is an error, not a row.
 REFERENCE = dict(hulls="cgenn", lorentz="cgenn", nbody="cgenn", o3="cgenn", o5="cgenn",
                  gravity="gatr")
-# The architectures of other papers that rotorch builds for an example, beside the one of its own paper.
-ALSO = dict(nbody=("fk",))
 CUDA_BATCHES = [32, 128, 512, 2048, 4096, 8192, 16384]
 # Where an example's cuda batches stop by default. An n-body sample is a graph of five bodies and twenty edges, twenty times the others'.
 LARGEST = dict(nbody=2048)
@@ -209,11 +201,11 @@ def completed(path):
 def skip(config, device, example):
     """
     There is no cpu triton: the flag is ignored and the run is a second plain rotorch run. And
-    the columns of the other papers are not this example's to run, unless rotorch builds it theirs.
+    the reference columns of the other papers are not this example's to run.
     """
     if device == "cpu" and "triton" in CONFIGS[config]:
         return True
-    return implementation(config) not in ("rotorch", reference(example), *ALSO.get(example_name(example), ()))
+    return implementation(config) not in ("rotorch", reference(example))
 
 
 def plan(args, has_cuda):

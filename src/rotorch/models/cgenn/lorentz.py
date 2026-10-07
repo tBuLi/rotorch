@@ -1,14 +1,16 @@
 import math
 
 import einops
+import sympy
 import torch
 from torch import nn
 from torch.nn.modules.lazy import LazyModuleMixin
 from torch.nn.parameter import UninitializedParameter
-from kingdon import MultiVector
+from kingdon import MultiVector, add_operator
+from kingdon.multivector import Scalar
 
 from ...nn.cgenn import FullyConnectedGeometricProduct, MVLayerNorm, MVLinear
-from ...nn.utils import cat, grade_of_blades, invariants, materialize_constants, segment_mean
+from ...nn.utils import cat, invariants, materialize_constants, segment_mean, sigmoid
 
 
 class Bladewise(nn.Module):
@@ -37,6 +39,12 @@ def scalar_mlp(features, bias=True, activate=False):
     )
 
 
+@add_operator(symbolic=True, codegen_symbolcls=sympy.Symbol)
+def grade_gate(X: MultiVector, H, W: Scalar[None], b: Scalar[None]) -> MultiVector:
+    """:class:`GradeGate`, with W[k] and b[k] the map from the hidden features H to the gates of the k-th grade of X."""
+    return sum(X.grade(g) * sigmoid(einops.einsum(H, W[k], "... h, f h -> ... f").e + b[k].e) for k, g in enumerate(X.grades))
+
+
 class GradeGate(LazyModuleMixin, nn.Module):
     """
     Known as psi and chi in cgenn: gate every grade of a multivector by a sigmoid of the scalar
@@ -60,23 +68,20 @@ class GradeGate(LazyModuleMixin, nn.Module):
             return
 
         with torch.no_grad():
-            input = materialize_constants(input)
-            self.register_buffer("blade_grades", grade_of_blades(input))
-            gates = self.features * len(input.grades)  # One per grade of every feature.
-            self.weight.materialize((gates, self.hidden_features))
-            self.bias.materialize((gates,))
+            grades = len(materialize_constants(input).grades)  # A gate per grade of every feature.
+            self.weight.materialize((grades, self.features, self.hidden_features))
+            self.bias.materialize((grades, self.features))
             self.reset_parameters()
 
     def reset_parameters(self):
-        nn.init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        # As nn.Linear's, from the hidden features to all the gates at once.
+        nn.init.kaiming_uniform_(self.weight.view(-1, self.hidden_features), a=math.sqrt(5))
         bound = 1 / math.sqrt(self.hidden_features)
         nn.init.uniform_(self.bias, -bound, bound)
 
     def forward(self, input: MultiVector, h: MultiVector) -> MultiVector:
-        gates = nn.functional.linear(self.hidden(h), self.weight, self.bias)
-        gates = einops.rearrange(torch.sigmoid(gates.e), "... (feature grade) -> grade ... feature", feature=self.features)
-        gates = input.algebra.multivector(gates.index_select(0, self.blade_grades), keys=input.keys())
-        return einops.einsum(input, gates, "..., ... -> ...")
+        input = materialize_constants(input)
+        return grade_gate(input, self.hidden(h), *(input.algebra.scalar(e=p) for p in (self.weight, self.bias)))
 
 
 class CGLayer(nn.Module):

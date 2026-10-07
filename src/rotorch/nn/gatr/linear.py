@@ -5,9 +5,9 @@ import torch
 from torch.nn.modules.lazy import LazyModuleMixin
 from torch.nn.parameter import UninitializedParameter
 from torch import nn
-from kingdon import MultiVector
+from kingdon import MultiVector, add_operator
 
-from ..utils import degenerate, insert_out_features, materialize_constants, register
+from ..utils import degenerate, insert_out_features, materialize_constants
 
 # How much of the variance a layer is meant to pass on, over the multivectors and over the
 # scalars, and where to sit its bias. `small` quietens the branch of a residual, and
@@ -35,6 +35,7 @@ def equivariant_maps(X: MultiVector):
             yield (g, True), shifted
 
 
+@add_operator(symbolic=True)
 def equi_linear(X: MultiVector, weights: MultiVector[None]) -> MultiVector:
     """Weigh every equivariant map of X and add them up, which is the general equivariant map."""
     tot = 0
@@ -74,8 +75,6 @@ class EquiLinear(LazyModuleMixin, nn.Module):
         if not self.has_uninitialized_params():
             return
 
-        self.equi_linear = register(input.algebra, equi_linear)
-
         with torch.no_grad():
             # Which maps there are depends on the grades the input turns out to carry, so a sparse
             # input, a point say, is a layer with fewer weights rather than one full of zeros.
@@ -112,7 +111,7 @@ class EquiLinear(LazyModuleMixin, nn.Module):
     def forward(self, input: MultiVector, scalars: MultiVector = None) -> tuple:
         input = materialize_constants(input)
         weights = input.algebra.scalar(e=self.weight)
-        result = self.equi_linear(insert_out_features(input), weights)
+        result = equi_linear(insert_out_features(input), weights)
         result = einops.reduce(result, "... o f -> ... o", "sum")  # Contract the input features.
         if self.bias is not None:
             result = result + input.algebra.scalar(e=self.bias)

@@ -1,22 +1,28 @@
 import math
 
-import einops
+import sympy
 import torch
+from einops import einsum
 from torch.nn.modules.lazy import LazyModuleMixin
 from torch.nn.parameter import UninitializedParameter
 from torch import nn
-from kingdon import MultiVector
+from kingdon import MultiVector, add_operator
+from kingdon.multivector import Scalar
 
-from ..utils import grade_of_blades, materialize_constants
+from ..utils import materialize_constants
 
-def gradewise_linear(X: MultiVector, weights: MultiVector[None]) -> MultiVector:
-    """
-    Apply a weight to every grade of X seperatelly.
-    """
-    tot = 0
-    for g, w in zip(X.grades, weights):
-        tot += w * X.grade(g)
-    return tot
+
+@add_operator(symbolic=True, codegen_symbolcls=sympy.Symbol)
+def linear(X: MultiVector, W: Scalar, b: Scalar = 0) -> MultiVector:
+    """:class:`MVLinear` with gradewise False, W the one matrix of every grade of X."""
+    return einsum(X, W, "... i, o i -> ... o") + b
+
+
+@add_operator(symbolic=True, codegen_symbolcls=sympy.Symbol)
+def gradewise_linear(X: MultiVector, W: Scalar[None], b: Scalar = 0) -> MultiVector:
+    """:class:`MVLinear`, with W[k] the matrix of the k-th grade of X."""
+    return einsum(X, W[X.gradeidx_of_blades], "... i, o i -> ... o") + b
+
 
 class MVLinear(LazyModuleMixin, nn.Module):
     """Linear map that gives every grade its own mixing matrix, unless gradewise is False."""
@@ -40,11 +46,8 @@ class MVLinear(LazyModuleMixin, nn.Module):
             return
 
         with torch.no_grad():
-            blade_grades = grade_of_blades(materialize_constants(input))
-            if not self.gradewise:  # Without gradewise every grade shares one matrix.
-                blade_grades = torch.zeros_like(blade_grades)
-            self.register_buffer("blade_grades", blade_grades)
-            self.weight.materialize((1 + int(blade_grades.max()), self.out_features, self.in_features))
+            grades = (len(materialize_constants(input).grades),) if self.gradewise else ()
+            self.weight.materialize((*grades, self.out_features, self.in_features))
             if self.bias is not None:
                 self.bias.materialize((self.out_features,))
             self.reset_parameters()
@@ -56,9 +59,4 @@ class MVLinear(LazyModuleMixin, nn.Module):
 
     def forward(self, input: MultiVector) -> MultiVector:
         input = materialize_constants(input)
-        # A multivector holding the matrix of each blade, rather than the matrix of each grade.
-        weight = input.algebra.multivector(self.weight.index_select(0, self.blade_grades), keys=input.keys())
-        result = einops.einsum(input, weight, "... i, o i -> ... o")
-        if self.bias is not None:
-            result = result + input.algebra.scalar(e=self.bias)
-        return result
+        return (gradewise_linear if self.gradewise else linear)(input, *(input.algebra.scalar(e=p) for p in (self.weight, self.bias) if p is not None))

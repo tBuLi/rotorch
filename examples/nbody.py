@@ -2,8 +2,7 @@
 Predict where charged particles end up, the nbody example of cgenn.
 
     python examples/nbody.py
-    python examples/nbody.py --impl fk
-    python examples/nbody.py --impl fused --backend triton
+    python examples/nbody.py --backend triton
     python examples/nbody.py --impl cgenn
 
 cgenn reads this dataset from the files the EGNN repository ships. This one is simulated here
@@ -68,34 +67,18 @@ def embed(algebra, loc, vel, edge_attr, charges, loc_end, edges):
             as_vector(loc), as_vector(loc_end))
 
 
-def rotorch(args, network=None):
+def rotorch(args):
     from kingdon import Algebra
     from rotorch.models.cgenn import NBodyCGGNN
 
     algebra = Algebra(DIM, **benchmark.codegen(args))
-    model = (network or NBodyCGGNN)(hidden_features=args.hidden_features, n_layers=args.num_layers).to(args.device)
+    model = NBodyCGGNN(hidden_features=args.hidden_features, n_layers=args.num_layers).to(args.device)
 
     def loss_fn(*batch):
         arguments, position, target = embed(algebra, *batch)
         return benchmark.mse_loss(position + model(*arguments), target)
 
     return model, loss_fn
-
-
-def fk(args):
-    """The same network with the layers of flash-clifford (Zhdanov, 2025) in its MLPs, which it offers as their faster replacement, built by rotorch out of kingdon operators."""
-    from rotorch.models.flashclifford import NBodyCGGNN
-
-    return rotorch(args, NBodyCGGNN)
-
-
-def fused(args):
-    """The same network with every layer of its MLPs one kingdon operator, :func:`~rotorch.nn.cgenn.fused.cemlp_layer`: under --backend triton one kernel forward and one backward."""
-    from functools import partial
-    from rotorch.models.cgenn import CEMLP, NBodyCGGNN
-    from rotorch.nn.cgenn.fused import CEMLPLayer
-
-    return rotorch(args, partial(NBodyCGGNN, mlp=partial(CEMLP, layer=CEMLPLayer)))
 
 
 def cgenn(args):
@@ -110,7 +93,7 @@ def cgenn(args):
 
 
 task = benchmark.Task(name="nbody", generate=generate,
-                      models=dict(rotorch=rotorch, fk=fk, fused=fused, cgenn=cgenn),
+                      models=dict(rotorch=rotorch, cgenn=cgenn),
                       defaults=dict(hidden_features=28, num_layers=3, batch_size=100,
                                     train_samples=3000, val_samples=512))
 

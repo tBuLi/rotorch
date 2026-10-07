@@ -1,11 +1,18 @@
-import einops
+import sympy
 import torch
+from einops import reduce
 from torch.nn.modules.lazy import LazyModuleMixin
 from torch.nn.parameter import UninitializedParameter
 from torch import nn
-from kingdon import MultiVector
+from kingdon import MultiVector, add_operator
 
-from ..utils import EPS, materialize_constants, norm
+from ..utils import EPS, _root, materialize_constants, scalar_normsq
+
+
+@add_operator(symbolic=True, codegen_symbolcls=sympy.Symbol)
+def layernorm(X: MultiVector, a) -> MultiVector:
+    """:class:`MVLayerNorm`."""
+    return a * X / (reduce(scalar_normsq(X).map(_root), "... o -> ... 1", "mean") + EPS)
 
 
 class MVLayerNorm(LazyModuleMixin, nn.Module):
@@ -31,6 +38,4 @@ class MVLayerNorm(LazyModuleMixin, nn.Module):
 
     def forward(self, input: MultiVector) -> MultiVector:
         input = materialize_constants(input)
-        norms = einops.reduce(norm(input), "... f -> ... 1", "mean") + EPS
-        scale = input.algebra.scalar(e=self.a / norms)  # A scalar multiplies every blade.
-        return einops.einsum(input, scale, "..., ... -> ...")
+        return layernorm(input, input.algebra.scalar(e=self.a))

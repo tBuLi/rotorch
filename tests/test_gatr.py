@@ -6,7 +6,7 @@ from rotorch.nn.gatr import (EquiLayerNorm, EquiLinear, GATrBlock, GeoMLP, Geome
                              ScalarGatedNonlinearity, SelfAttention)
 from rotorch.nn.gatr.linear import equivariant_maps
 from rotorch.nn.gatr.utils import join_normsq, weight
-from rotorch.nn.utils import materialize_constants, register
+from rotorch.nn.utils import materialize_constants
 
 
 @pytest.fixture
@@ -104,7 +104,7 @@ def test_join_is_the_distance(pga):
     hand to turn it into a dot product.
     """
     p, q = (pga.point(torch.randn(3, 7, 1)) for _ in range(2))
-    distance = register(pga, join_normsq)(p, q).e
+    distance = join_normsq(p, q).e
     coordinates = lambda point: torch.stack([-v for v in point.grade(3).values()[:3]])
     assert torch.allclose(distance, ((coordinates(p) - coordinates(q)) ** 2).sum(dim=0))
     assert torch.allclose(weight(materialize_constants(p)).e, torch.ones(()))

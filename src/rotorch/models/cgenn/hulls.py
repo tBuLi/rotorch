@@ -2,7 +2,7 @@ from torch import nn
 from kingdon import MultiVector
 
 from ...nn.cgenn import GeometricProduct, MVLinear
-from ...nn.utils import register, scalar_normsq
+from ...nn.utils import scalar_normsq
 
 
 class ConvexHullCGMLP(nn.Module):
@@ -24,5 +24,5 @@ class ConvexHullCGMLP(nn.Module):
         )
 
     def forward(self, input: MultiVector) -> MultiVector:
-        input_normsq = register(input.algebra, scalar_normsq)(self.net(input))
+        input_normsq = scalar_normsq(self.net(input))
         return self.mlp(input_normsq.sqrt())

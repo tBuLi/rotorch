@@ -2,7 +2,7 @@ API reference
 =============
 
 Both :mod:`rotorch.nn` and :mod:`rotorch.models` are organised one subpackage per architecture.
-cgenn, GATr and flash-clifford are implemented so far, and others will appear alongside them
+cgenn and GATr are implemented so far, and others will appear alongside them
 rather than in place of them. What they share, being about multivectors rather than about any
 one paper, lives in :mod:`rotorch.nn.utils`.
 
@@ -30,14 +30,6 @@ GATr
    :imported-members:
    :show-inheritance:
 
-flash-clifford
-^^^^^^^^^^^^^^
-
-.. automodule:: rotorch.nn.flashclifford
-   :members:
-   :imported-members:
-   :show-inheritance:
-
 Models
 ------
 
@@ -55,14 +47,6 @@ GATr
 ^^^^
 
 .. automodule:: rotorch.models.gatr
-   :members:
-   :imported-members:
-   :show-inheritance:
-
-flash-clifford
-^^^^^^^^^^^^^^
-
-.. automodule:: rotorch.models.flashclifford
    :members:
    :imported-members:
    :show-inheritance:

@@ -1,11 +1,18 @@
-import einops
+import sympy
 import torch
 from torch.nn.modules.lazy import LazyModuleMixin
 from torch.nn.parameter import UninitializedParameter
 from torch import nn
-from kingdon import MultiVector
+from kingdon import MultiVector, add_operator
+from kingdon.multivector import Scalar
 
-from ..utils import EPS, grade_norm, grade_of_blades, materialize_constants
+from ..utils import EPS, materialize_constants, norm, sigmoid
+
+
+@add_operator(symbolic=True, codegen_symbolcls=sympy.Symbol)
+def normalize(X: MultiVector, a: Scalar[None]) -> MultiVector:
+    """:class:`NormalizationLayer`."""
+    return sum(X.grade(g) / (sigmoid(a[k].e) * (norm(X.grade(g)) - 1) + 1 + EPS) for k, g in enumerate(X.grades))
 
 
 class NormalizationLayer(LazyModuleMixin, nn.Module):
@@ -25,9 +32,7 @@ class NormalizationLayer(LazyModuleMixin, nn.Module):
 
         with torch.no_grad():
             input = materialize_constants(input)
-            self.grades = input.grades
-            self.register_buffer("blade_grades", grade_of_blades(input))
-            self.a.materialize((len(self.grades), input.shape[-1]))
+            self.a.materialize((len(input.grades), input.shape[-1]))
             self.reset_parameters()
 
     def reset_parameters(self):
@@ -35,10 +40,4 @@ class NormalizationLayer(LazyModuleMixin, nn.Module):
 
     def forward(self, input: MultiVector) -> MultiVector:
         input = materialize_constants(input)
-        s_a = torch.sigmoid(self.a)
-        # Interpolate between 1 and the norm of each grade. A null grade has no norm to speak of,
-        # so the entries need broadcasting against each other before they can be stacked.
-        norms = [s_a[i] * (n - 1) + 1 for i, n in enumerate(grade_norm(input))]
-        norms = torch.stack(torch.broadcast_tensors(*norms))
-        scale = input.algebra.multivector(1 / (norms.index_select(0, self.blade_grades) + EPS), keys=input.keys())
-        return einops.einsum(input, scale, "..., ... -> ...")
+        return normalize(input, input.algebra.scalar(e=self.a))
