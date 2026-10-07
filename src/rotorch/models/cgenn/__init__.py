@@ -6,7 +6,7 @@ tagging the jets of top quarks.
 """
 
 from .hulls import ConvexHullCGMLP
-from .lorentz import CGLayer, GradeGate, LorentzCGGNN, grade_gate
+from .lorentz import CGLayer, FCLayer, GradeGate, LorentzCGGNN, fc_layer, fc_layer_unnormalized, grade_gate
 from .nbody import CEMLP, CEMLPLayer, EGCL, NBodyCGGNN, cemlp_layer
 from .o3 import O3CGMLP
 from .o5 import O5CGMLP

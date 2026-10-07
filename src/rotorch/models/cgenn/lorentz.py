@@ -9,7 +9,7 @@ from torch.nn.parameter import UninitializedParameter
 from kingdon import MultiVector, add_operator
 from kingdon.multivector import Scalar
 
-from ...nn.cgenn import FullyConnectedGeometricProduct, MVLayerNorm, MVLinear
+from ...nn.cgenn import FullyConnectedGeometricProduct, MVLayerNorm, MVLinear, fc_geometric_product, fc_geometric_product_unnormalized, layernorm
 from ...nn.utils import cat, invariants, materialize_constants, segment_mean, sigmoid
 
 
@@ -84,6 +84,32 @@ class GradeGate(LazyModuleMixin, nn.Module):
         return grade_gate(input, self.hidden(h), *(input.algebra.scalar(e=p) for p in (self.weight, self.bias)))
 
 
+@add_operator(symbolic=True, codegen_symbolcls=sympy.Symbol)
+def fc_layer(X: MultiVector, Wr: Scalar[None], n: Scalar[None], Wl: Scalar[None], bl, w: Scalar[None], s) -> MultiVector:
+    """A layer of :class:`CGLayer`, cgenn's "fc" one: FullyConnectedGeometricProduct and MVLayerNorm."""
+    return layernorm(fc_geometric_product(X, Wr, n, Wl, bl, w), s)
+
+
+@add_operator(symbolic=True, codegen_symbolcls=sympy.Symbol)
+def fc_layer_unnormalized(X: MultiVector, Wr: Scalar[None], Wl: Scalar[None], bl, w: Scalar[None], s) -> MultiVector:
+    """:func:`fc_layer` without the normalization of its product."""
+    return layernorm(fc_geometric_product_unnormalized(X, Wr, Wl, bl, w), s)
+
+
+class FCLayer(nn.Sequential):
+    """A layer of :class:`CGLayer`, its FullyConnectedGeometricProduct and MVLayerNorm computed as one operator, :func:`fc_layer`."""
+
+    def forward(self, X: MultiVector) -> MultiVector:
+        fc, norm = self
+        # The norm takes what the product gives, so they size themselves by running once. An isinstance, unlike has_uninitialized_params, torch.compile traces through.
+        if isinstance(fc.weight, UninitializedParameter):
+            super().forward(X)
+        normalization = () if fc.normalization is None else (fc.normalization.a,)
+        params = fc.linear_right.weight, *normalization, fc.linear_left.weight, fc.linear_left.bias, fc.weight, norm.a
+        X = materialize_constants(X)
+        return (fc_layer if normalization else fc_layer_unnormalized)(X, *(X.algebra.scalar(e=p) for p in params))
+
+
 class CGLayer(nn.Module):
     """
     One round of message passing over the multivectors x and the scalars h at once, each feeding
@@ -94,7 +120,7 @@ class CGLayer(nn.Module):
         super().__init__()
 
         self.residual = residual
-        product = lambda i, o: nn.Sequential(FullyConnectedGeometricProduct(i, o, normalization_init=normalization_init), MVLayerNorm())
+        product = lambda i, o: FCLayer(FullyConnectedGeometricProduct(i, o, normalization_init=normalization_init), MVLayerNorm())
         self.phi_x = product(3 * features_x + edge_attr_x, features_x)
         self.theta_x = product(2 * features_x + node_attr_x, features_x)
         self.phi_h = scalar_mlp(features_h, bias=False, activate=True)

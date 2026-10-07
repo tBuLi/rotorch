@@ -1,8 +1,10 @@
 import itertools
 import math
 
+import einops
 import sympy
 import torch
+from einops import einsum
 from torch.nn.modules.lazy import LazyModuleMixin
 from torch.nn.parameter import UninitializedParameter
 from torch import nn
@@ -25,13 +27,33 @@ def number_of_weights_wgp(X: MultiVector, Y: MultiVector) -> int:
     return sum(1 for _ in paths(X, Y))
 
 
-def wgp(X: MultiVector, Y: MultiVector, weights: MultiVector[None]) -> MultiVector:
+def cayley(X: MultiVector, Y: MultiVector) -> tuple[MultiVector, MultiVector]:
+    """
+    Index multivectors with the keys of X*Y, holding for every blade c of it a row over the blades a of X:
+    J where Y holds the blade a^c, and P where :func:`signed` holds the weight of the path of e_a e_(a^c), with the sign of that product.
+    """
+    alg, at = X.algebra, {b: j for j, b in enumerate(Y.keys())}
+    sign = lambda a, c: alg.signs[a, a ^ c] if a ^ c in at else 0
+    keys = tuple(c for c in alg.indices_for_grades(tuple(range(alg.d + 1))) if any(sign(a, c) for a in X.keys()))
+    path = {p: k for k, p in enumerate(sorted({(a.bit_count(), b.bit_count(), (a ^ b).bit_count()) for a in X.keys() for b in Y.keys() if alg.signs[a, b]}))}
+    J = [[at.get(a ^ c, 0) for a in X.keys()] for c in keys]
+    P = [[path[a.bit_count(), (a ^ c).bit_count(), c.bit_count()] + len(path) * (sign(a, c) < 0) if sign(a, c) else 2 * len(path) for a in X.keys()] for c in keys]
+    return tuple(alg.mvtype.fromkeysvalues(alg, keys, rows, raw=True) for rows in (J, P))
+
+
+def signed(w: Scalar) -> Scalar:
+    """[w; -w; 0], which the P of :func:`cayley` indexes: the weight of a path, with a sign, or nothing."""
+    return einops.pack([w, -w, 0 * w], "* f")[0]
+
+
+def wgp(X: MultiVector, Y: MultiVector, w: Scalar) -> MultiVector:
     """The geometric product of X and Y, with a weight for each of its :func:`paths`."""
-    return sum(weights[k] * Z for k, Z in enumerate(paths(X, Y)))
+    J, P = cayley(X, Y)
+    return einsum(X.blades, Y.blades[J], signed(w)[P], "a ... f, a ... f, a f -> ... f")
 
 
 @add_operator(symbolic=True, codegen_symbolcls=sympy.Symbol)
-def geometric_product(X: MultiVector, Wr: Scalar[None], n: Scalar[None], Wl: Scalar[None], bl, w: Scalar[None]) -> MultiVector:
+def geometric_product(X: MultiVector, Wr: Scalar[None], n: Scalar[None], Wl: Scalar[None], bl, w: Scalar) -> MultiVector:
     """:class:`GeometricProduct`."""
     return (gradewise_linear(X, Wl, bl) + wgp(X, normalize(gradewise_linear(X, Wr), n), w)) / math.sqrt(2)
 
