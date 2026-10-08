@@ -9,7 +9,7 @@ from ...nn.utils import cat, materialize_constants, segment_mean
 
 
 @add_operator(symbolic=True, codegen_symbolcls=sympy.Symbol)
-def cemlp_layer(X, W: Scalar[None], b, a: Scalar[None], c: Scalar[None], Wr: Scalar[None], n: Scalar[None], Wl: Scalar[None], bl, w: Scalar, s):
+def cemlp_layer(X, W: Scalar[None], b, a: Scalar[None], c: Scalar[None], Wr: Scalar[None], n: Scalar, Wl: Scalar[None], bl, w: Scalar, s):
     """A layer of :class:`CEMLP`: MVLinear, MVSiLU, GeometricProduct and MVLayerNorm."""
     return layernorm(geometric_product(mvsilu(gradewise_linear(X, W, b), a, c), Wr, n, Wl, bl, w), s)
 

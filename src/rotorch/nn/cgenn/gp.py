@@ -42,8 +42,8 @@ def cayley(X: MultiVector, Y: MultiVector) -> tuple[MultiVector, MultiVector]:
 
 
 def signed(w: Scalar) -> Scalar:
-    """[w; -w; 0], which the P of :func:`cayley` indexes: the weight of a path, with a sign, or nothing."""
-    return einops.pack([w, -w, 0 * w], "* f")[0]
+    """[w; -w; 0] along the first axis, which the P of :func:`cayley` indexes: the weight of a path, with a sign, or nothing."""
+    return einops.pack([w, -w, 0 * w], " ".join(["*", *(f"d{k}" for k in range(w.ndim - 1))]))[0]
 
 
 def wgp(X: MultiVector, Y: MultiVector, w: Scalar) -> MultiVector:
@@ -53,7 +53,7 @@ def wgp(X: MultiVector, Y: MultiVector, w: Scalar) -> MultiVector:
 
 
 @add_operator(symbolic=True, codegen_symbolcls=sympy.Symbol)
-def geometric_product(X: MultiVector, Wr: Scalar[None], n: Scalar[None], Wl: Scalar[None], bl, w: Scalar) -> MultiVector:
+def geometric_product(X: MultiVector, Wr: Scalar[None], n: Scalar, Wl: Scalar[None], bl, w: Scalar) -> MultiVector:
     """:class:`GeometricProduct`."""
     return (gradewise_linear(X, Wl, bl) + wgp(X, normalize(gradewise_linear(X, Wr), n), w)) / math.sqrt(2)
 

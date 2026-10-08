@@ -276,10 +276,10 @@ def summarize(path, example):
         table(best, oom, device, "median_ms", f"ms/step, and the speedup over {against}",
               lambda baseline, value: baseline / value, example)
         table(best, oom, device, "memory_forward_mib",
-              f"peak MiB of a forward, and the ratio to {against} (below one is a saving)",
+              f"peak MiB a forward takes on top of what training holds, and the ratio to {against} (below one is a saving)",
               lambda baseline, value: value / baseline, example)
         table(best, oom, device, "memory_step_mib",
-              f"peak MiB of a forward and backward, and the ratio to {against}",
+              f"peak MiB a forward and backward take on top of what training holds, and the ratio to {against}",
               lambda baseline, value: value / baseline, example)
 
 

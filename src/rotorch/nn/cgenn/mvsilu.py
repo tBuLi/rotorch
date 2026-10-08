@@ -1,18 +1,20 @@
 import sympy
 import torch
+from einops import einsum
 from torch.nn.modules.lazy import LazyModuleMixin
 from torch.nn.parameter import UninitializedParameter
 from torch import nn
 from kingdon import MultiVector, add_operator
 from kingdon.multivector import Scalar
 
-from ..utils import mag2, materialize_constants, sigmoid
+from ..utils import invariants, materialize_constants, sigmoid
 
 
 @add_operator(symbolic=True, codegen_symbolcls=sympy.Symbol)
 def mvsilu(X: MultiVector, a: Scalar[None], b: Scalar[None]) -> MultiVector:
-    """:class:`MVSiLU`."""
-    return sum(X.grade(g) * sigmoid(a[k].e * (X.e if g == 0 else mag2(X.grade(g))) + b[k].e) for k, g in enumerate(X.grades))
+    """:class:`MVSiLU`, with a[k] and b[k] the map from the invariant of the k-th grade of X to its gate."""
+    k = X.gradeidx_of_blades
+    return einsum(X, (einsum(invariants(X)[k], a[k], "... f, f -> ... f") + b[k]).map(sigmoid), "... f, ... f -> ... f")
 
 
 class MVSiLU(LazyModuleMixin, nn.Module):

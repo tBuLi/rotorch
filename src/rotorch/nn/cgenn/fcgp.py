@@ -9,25 +9,26 @@ from torch import nn
 from kingdon import MultiVector, add_operator
 from kingdon.multivector import Scalar
 
-from .gp import number_of_weights_wgp, paths
+from .gp import cayley, number_of_weights_wgp, signed
 from .linear import MVLinear, gradewise_linear
 from .normalization import NormalizationLayer, normalize
 from ..utils import materialize_constants
 
 
-def fc_wgp(X: MultiVector, Y: MultiVector, w: Scalar[None]) -> MultiVector:
+def fc_wgp(X: MultiVector, Y: MultiVector, w: Scalar) -> MultiVector:
     """:func:`~rotorch.nn.cgenn.gp.wgp` with w[k] the matrix that mixes the features of the k-th path."""
-    return sum(einsum(Z, w[k], "... i, o i -> ... o") for k, Z in enumerate(paths(X, Y)))
+    J, P = cayley(X, Y)
+    return einsum(X.blades, Y.blades[J], signed(w)[P], "a ... i, a ... i, a o i -> ... o")
 
 
 @add_operator(symbolic=True, codegen_symbolcls=sympy.Symbol)
-def fc_geometric_product(X: MultiVector, Wr: Scalar[None], n: Scalar[None], Wl: Scalar[None], bl, w: Scalar[None]) -> MultiVector:
+def fc_geometric_product(X: MultiVector, Wr: Scalar[None], n: Scalar, Wl: Scalar[None], bl, w: Scalar) -> MultiVector:
     """:class:`FullyConnectedGeometricProduct`."""
     return (gradewise_linear(X, Wl, bl) + fc_wgp(X, normalize(gradewise_linear(X, Wr), n), w)) / math.sqrt(2)
 
 
 @add_operator(symbolic=True, codegen_symbolcls=sympy.Symbol)
-def fc_geometric_product_unnormalized(X: MultiVector, Wr: Scalar[None], Wl: Scalar[None], bl, w: Scalar[None]) -> MultiVector:
+def fc_geometric_product_unnormalized(X: MultiVector, Wr: Scalar[None], Wl: Scalar[None], bl, w: Scalar) -> MultiVector:
     """:class:`FullyConnectedGeometricProduct` without its normalization."""
     return (gradewise_linear(X, Wl, bl) + fc_wgp(X, gradewise_linear(X, Wr), w)) / math.sqrt(2)
 

@@ -64,11 +64,6 @@ def mag2(X: MultiVector):
     return sum(scalar_normsq(X).values())
 
 
-def norm(X: MultiVector):
-    """Magnitude of the single grade multivector X, smoothed to stay differentiable at zero."""
-    return _root(mag2(X))
-
-
 def _root(squared):
     return (squared ** 2 + 1e-16) ** 0.25
 
@@ -83,17 +78,15 @@ class sigmoid(sympy.Function):
         return f"torch.sigmoid({printer._print(self.args[0])})"
 
 
-@add_operator(symbolic=True)
-def gradewise_normsq(X: MultiVector) -> tuple[MultiVector, ...]:
-    """:func:`scalar_normsq` of every grade of X, as one operator rather than one per grade."""
-    return tuple(scalar_normsq(X.grade(g)) for g in X.grades)
-
-
+@add_operator(symbolic=True, codegen_symbolcls=sympy.Symbol)
 def invariants(X: MultiVector) -> MultiVector:
     """
-    One invariant per grade of X, laid out feature by feature: the scalar part as it is, and the
+    One invariant per grade of X, stacked along a first axis over its grades: the scalar part as it is, and the
     squared magnitude of every other grade, neither of which the group can see.
     """
-    X = materialize_constants(X)
-    per_grade = torch.broadcast_tensors(*(X.e if g == 0 else m.e for g, m in zip(X.grades, gradewise_normsq(X))))
-    return X.algebra.scalar(e=einops.rearrange(torch.stack(per_grade), "grade ... feature -> ... (feature grade)"))
+    return einops.rearrange([X.grade(0) if g == 0 else scalar_normsq(X.grade(g)) for g in X.grades], "k ... -> k ...")
+
+
+def magnitudes(X: MultiVector) -> MultiVector:
+    """The magnitude of every grade of X, smoothed to stay differentiable at zero, stacked along a first axis over its grades."""
+    return einops.rearrange([scalar_normsq(X.grade(g)) for g in X.grades], "k ... -> k ...").map(_root)

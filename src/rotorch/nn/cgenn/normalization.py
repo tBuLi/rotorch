@@ -1,18 +1,20 @@
 import sympy
 import torch
+from einops import einsum
 from torch.nn.modules.lazy import LazyModuleMixin
 from torch.nn.parameter import UninitializedParameter
 from torch import nn
 from kingdon import MultiVector, add_operator
 from kingdon.multivector import Scalar
 
-from ..utils import EPS, materialize_constants, norm, sigmoid
+from ..utils import EPS, magnitudes, materialize_constants, sigmoid
 
 
 @add_operator(symbolic=True, codegen_symbolcls=sympy.Symbol)
-def normalize(X: MultiVector, a: Scalar[None]) -> MultiVector:
-    """:class:`NormalizationLayer`."""
-    return sum(X.grade(g) / (sigmoid(a[k].e) * (norm(X.grade(g)) - 1) + 1 + EPS) for k, g in enumerate(X.grades))
+def normalize(X: MultiVector, a: Scalar) -> MultiVector:
+    """:class:`NormalizationLayer`, with a[k] how far the k-th grade of X goes towards its normalized self."""
+    shrink = einsum(a.map(sigmoid), magnitudes(X) - 1, "k f, k ... f -> k ... f") + 1 + EPS
+    return einsum(X, (1 / shrink)[X.gradeidx_of_blades], "... f, ... f -> ... f")
 
 
 class NormalizationLayer(LazyModuleMixin, nn.Module):
