@@ -12,13 +12,13 @@ from kingdon.multivector import Scalar
 from .gp import cayley, number_of_weights_wgp, signed
 from .linear import MVLinear, gradewise_linear
 from .normalization import NormalizationLayer, normalize
-from ..utils import materialize_constants
+from ..utils import asscalar, materialize_constants
 
 
 def fc_wgp(X: MultiVector, Y: MultiVector, w: Scalar) -> MultiVector:
     """:func:`~rotorch.nn.cgenn.gp.wgp` with w[k] the matrix that mixes the features of the k-th path."""
     J, P = cayley(X, Y)
-    return einsum(X.blades, Y.blades[J], signed(w)[P], "a ... i, a ... i, a o i -> ... o")
+    return einsum(asscalar(X), asscalar(Y)[J], signed(w)[P], "a ... i, a ... i, a o i -> ... o")
 
 
 @add_operator(symbolic=True, codegen_symbolcls=sympy.Symbol)

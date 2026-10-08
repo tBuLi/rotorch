@@ -3,6 +3,8 @@ import kingdon.einops_backend  # noqa: F401  Registers MultiVector with einops.
 import sympy
 import torch
 from kingdon import MultiVector, add_operator
+from kingdon.codegen import Stack
+from kingdon.multivector import Scalar
 
 EPS = 1e-6
 
@@ -12,6 +14,15 @@ def cat(mvs: list[MultiVector]) -> MultiVector:
     batch = " ".join(f"d{i}" for i in range(mvs[0].ndim - 1))
     packed, _ = einops.pack([mv.asmvtype() for mv in mvs], f"{batch} *")
     return packed
+
+
+def asscalar(X: MultiVector) -> Scalar:
+    """The coefficients of X as a scalar whose first axis runs over its blades: no longer a multivector, it leaves its geometry to the tables an einsum takes it with, as those of :func:`~rotorch.nn.cgenn.gp.cayley`."""
+    if not X.issymbolic:
+        return X.algebra.scalar(e=X.values())
+    res = X.algebra.scalar(e=Stack(*X.values()))
+    res.shape = (len(X.keys()), *X.shape)
+    return res
 
 
 def segment_mean(X: MultiVector, segment_ids: torch.Tensor, num_segments: int) -> MultiVector:

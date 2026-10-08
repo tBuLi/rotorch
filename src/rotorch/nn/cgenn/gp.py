@@ -13,7 +13,7 @@ from kingdon.multivector import Scalar
 
 from .linear import MVLinear, gradewise_linear
 from .normalization import NormalizationLayer, normalize
-from ..utils import materialize_constants
+from ..utils import asscalar, materialize_constants
 
 
 def paths(X: MultiVector, Y: MultiVector):
@@ -49,7 +49,7 @@ def signed(w: Scalar) -> Scalar:
 def wgp(X: MultiVector, Y: MultiVector, w: Scalar) -> MultiVector:
     """The geometric product of X and Y, with a weight for each of its :func:`paths`."""
     J, P = cayley(X, Y)
-    return einsum(X.blades, Y.blades[J], signed(w)[P], "a ... f, a ... f, a f -> ... f")
+    return einsum(asscalar(X), asscalar(Y)[J], signed(w)[P], "a ... f, a ... f, a f -> ... f")
 
 
 @add_operator(symbolic=True, codegen_symbolcls=sympy.Symbol)

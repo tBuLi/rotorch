@@ -13,6 +13,11 @@ from ...nn.cgenn import FullyConnectedGeometricProduct, MVLayerNorm, MVLinear, f
 from ...nn.utils import cat, invariants, materialize_constants, segment_mean, sigmoid
 
 
+def invariant_features(X: MultiVector) -> MultiVector:
+    """The :func:`~rotorch.nn.utils.invariants` of X as scalar features, those of each of its features one after another."""
+    return einops.rearrange(invariants(materialize_constants(X)), "k ... f -> ... (f k)")
+
+
 class Bladewise(nn.Module):
     """
     Apply `module` to the coefficients of every blade in turn, for the modules that count their
@@ -42,7 +47,8 @@ def scalar_mlp(features, bias=True, activate=False):
 @add_operator(symbolic=True, codegen_symbolcls=sympy.Symbol)
 def grade_gate(X: MultiVector, H, W: Scalar[None], b: Scalar[None]) -> MultiVector:
     """:class:`GradeGate`, with W[k] and b[k] the map from the hidden features H to the gates of the k-th grade of X."""
-    return sum(X.grade(g) * sigmoid(einops.einsum(H, W[k], "... h, f h -> ... f").e + b[k].e) for k, g in enumerate(X.grades))
+    k = X.gradeidx_of_blades
+    return einops.einsum(X, (einops.einsum(H, W[k], "... h, f h -> ... f") + b[k]).map(sigmoid), "... f, ... f -> ... f")
 
 
 class GradeGate(LazyModuleMixin, nn.Module):
@@ -85,13 +91,13 @@ class GradeGate(LazyModuleMixin, nn.Module):
 
 
 @add_operator(symbolic=True, codegen_symbolcls=sympy.Symbol)
-def fc_layer(X: MultiVector, Wr: Scalar[None], n: Scalar[None], Wl: Scalar[None], bl, w: Scalar[None], s) -> MultiVector:
+def fc_layer(X: MultiVector, Wr: Scalar[None], n: Scalar, Wl: Scalar[None], bl, w: Scalar, s) -> MultiVector:
     """A layer of :class:`CGLayer`, cgenn's "fc" one: FullyConnectedGeometricProduct and MVLayerNorm."""
     return layernorm(fc_geometric_product(X, Wr, n, Wl, bl, w), s)
 
 
 @add_operator(symbolic=True, codegen_symbolcls=sympy.Symbol)
-def fc_layer_unnormalized(X: MultiVector, Wr: Scalar[None], Wl: Scalar[None], bl, w: Scalar[None], s) -> MultiVector:
+def fc_layer_unnormalized(X: MultiVector, Wr: Scalar[None], Wl: Scalar[None], bl, w: Scalar, s) -> MultiVector:
     """:func:`fc_layer` without the normalization of its product."""
     return layernorm(fc_geometric_product_unnormalized(X, Wr, Wl, bl, w), s)
 
@@ -130,12 +136,12 @@ class CGLayer(nn.Module):
 
     def message(self, h_i, h_j, x_i, x_j, edge_attr_x):
         x_msg = self.phi_x(cat([x_i, x_j, x_i - x_j, edge_attr_x]))
-        h_msg = self.phi_h(cat([invariants(x_msg), h_i, h_j, h_i - h_j]))
+        h_msg = self.phi_h(cat([invariant_features(x_msg), h_i, h_j, h_i - h_j]))
         return h_msg, self.psi_x(x_msg, h_msg)
 
     def update(self, h, x, h_agg, x_agg, node_attr_h, node_attr_x):
         x_out = self.theta_x(cat([x, x_agg, node_attr_x]))
-        h_out = self.theta_h(cat([h, h_agg, invariants(x), node_attr_h]))
+        h_out = self.theta_h(cat([h, h_agg, invariant_features(x), node_attr_h]))
         return h_out, self.chi_x(x_out, h_out)
 
     def forward(self, h, x, edges, node_attr_h, node_attr_x, edge_attr_x):
@@ -170,5 +176,5 @@ class LorentzCGGNN(nn.Module):
         for layer in self.layers:
             h, x = layer(h, x, edges, node_attr_h, node_attr_x, edge_attr_x)
 
-        jets = einops.reduce(cat([h, invariants(x)]), "(jet node) feature -> jet feature", "mean", node=n_nodes)
+        jets = einops.reduce(cat([h, invariant_features(x)]), "(jet node) feature -> jet feature", "mean", node=n_nodes)
         return self.decoder(jets)
