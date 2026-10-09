@@ -57,6 +57,8 @@ CONFIGS = {
     "rotorch-operators": ["--compile", "operators"],
     "rotorch-model": ["--compile", "model"],
     "rotorch-triton-model": ["--backend", "triton", "--compile", "model"],
+    "cgenn-graphs": ["--impl", "cgenn", "--compile", "graphs"],
+    "rotorch-triton-graphs": ["--backend", "triton", "--compile", "graphs"],
 }
 # Run these first. The eager ones cost nothing to start; triton pays a compile per kernel, which
 # is seconds against the minutes inductor wants for a whole model.
@@ -200,10 +202,10 @@ def completed(path):
 
 def skip(config, device, example):
     """
-    There is no cpu triton: the flag is ignored and the run is a second plain rotorch run. And
-    the reference columns of the other papers are not this example's to run.
+    There is no cpu triton, nor cpu graphs: the flag is ignored and the run is a second run of
+    another column. And the reference columns of the other papers are not this example's to run.
     """
-    if device == "cpu" and "triton" in CONFIGS[config]:
+    if device == "cpu" and ("triton" in CONFIGS[config] or "graphs" in CONFIGS[config]):
         return True
     return implementation(config) not in ("rotorch", reference(example))
 

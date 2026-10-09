@@ -141,11 +141,11 @@ def train(args, task):
         raise SystemExit(f"Could not import the {args.impl} model ({error}). Point "
                          f"--{args.impl}-path at your {REFERENCES[args.impl]} checkout, and "
                          f"install what that needs beyond rotorch's own dependencies.") from error
-    if args.compile == "model":
+    if args.compile in ("model", "graphs"):
         # kingdon generates its operators on the first call, which dynamo cannot trace, and the
         # lazy layers size their parameters there too. So run once before compiling.
         loss_fn(*(t[:args.batch_size] for t in train_set))
-        loss_fn = torch.compile(loss_fn)
+        loss_fn = torch.compile(loss_fn, mode="reduce-overhead" if args.compile == "graphs" else None)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
     times = []
@@ -200,9 +200,10 @@ def run(task):
     parser.add_argument("--backend", choices=["torch", "triton"], default="torch",
                         help="how kingdon emits its operators: as torch calls, or each as "
                              "one triton kernel forward and one backward")
-    parser.add_argument("--compile", choices=["none", "operators", "model"], default="none",
+    parser.add_argument("--compile", choices=["none", "operators", "model", "graphs"], default="none",
                         help="compile every operator kingdon generates, which hands torch.compile "
-                             "to kingdon as its wrapper, or the model as a whole")
+                             "to kingdon as its wrapper, or the model as a whole, which graphs "
+                             "then replays as CUDA graphs, leaving the launches out of a step")
     for impl, checkout in REFERENCES.items():
         parser.add_argument(f"--{impl}-path",
                             default=os.path.join(os.path.dirname(__file__), "..", "..", checkout))
