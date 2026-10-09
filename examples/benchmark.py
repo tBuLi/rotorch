@@ -146,7 +146,7 @@ def train(args, task):
         # lazy layers size their parameters there too. So run once before compiling.
         loss_fn(*(t[:args.batch_size] for t in train_set))
         loss_fn = torch.compile(loss_fn, mode="reduce-overhead" if args.compile == "graphs" else None)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, fused=True)
 
     times = []
     for step in range(args.steps):
