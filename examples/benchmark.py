@@ -71,7 +71,7 @@ def synchronize(device):
 def measure_memory(device):
     """
     The peak allocation over the block on top of what is held when it starts, and that held part, in MiB.
-    Resetting the counter sets its peak to what is held, not to zero: the parameters, their gradients and the optimizer's state,
+    Resetting the counter sets its peak to what is held, not to zero: the parameters and the optimizer's state,
     the batch, and the workspace cuBLAS keeps from its first call on, some 8 MiB a thread. Those do not grow with the batch, and
     at a small one they are most of the peak, so they are reported apart rather than in it. The work is waited for, so that a
     queue that has not run yet cannot hide it. Zero on cpu, where torch keeps no such counter.
@@ -174,6 +174,8 @@ def train(args, task):
     print(f"  first step {times[0] * 1e3:.0f} ms, then {warm.median() * 1e3:.1f} ms/step "
           f"(mean {warm.mean() * 1e3:.1f}, total {sum(times):.1f} s)")
     if args.device.startswith("cuda"):  # How much of the card a batch this size needs.
+        # As a step starts: a backward adding to the gradients of the last one would add to what a CUDA graph's replay has since overwritten.
+        optimizer.zero_grad()
         forward, forward_backward, held = memory(loss_fn, batch, args.device)
         print(f"  memory {forward:.1f} MiB forward, {forward_backward:.1f} MiB "
               f"forward and backward, on top of {held:.1f} MiB held")
