@@ -1,5 +1,5 @@
 """
-Run one example over the whole benchmark matrix and write every result to one csv.
+Run examples over the benchmark matrix, with a separate csv for each example.
 
 Each run is timed and, on cuda, weighed: the peak allocation of a forward on its own and of a
 forward and backward together, so that the saving can be read as a ratio to cgenn the way
@@ -13,6 +13,8 @@ faster run can be kept and so that a compiled run is seen once cold and once war
     python examples/sweep.py --devices cuda         # gpu only
     python examples/sweep.py --preset quick         # eager only, small batches, one rep
     python examples/sweep.py --preset ends          # everything, smallest and largest batch, one rep
+    python examples/sweep.py --all --preset quick   # all CGENN examples, one after another
+    python examples/sweep.py --no-cse               # disable Kingdon CSE
     python examples/sweep.py --dry-run              # print the plan and stop
 
 Every example is measured against the implementation of its own paper, which for the cgenn
@@ -43,6 +45,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 
 # Implementation -> the flags that select it. The order is the order of the table in the docs,
@@ -68,6 +71,7 @@ FIRST = ("cgenn", "gatr", "rotorch", "rotorch-triton")
 # example knows nothing of the others, so asking it for one of theirs is an error, not a row.
 REFERENCE = dict(hulls="cgenn", lorentz="cgenn", nbody="cgenn", o3="cgenn", o5="cgenn",
                  gravity="gatr")
+CGENN_EXAMPLES = tuple(name for name, impl in REFERENCE.items() if impl == "cgenn")
 CUDA_BATCHES = [32, 128, 512, 2048, 4096, 8192, 16384]
 # Where an example's cuda batches stop by default. An n-body sample is a graph of five bodies and twenty edges, twenty times the others'.
 LARGEST = dict(nbody=2048)
@@ -75,7 +79,7 @@ LARGEST = dict(nbody=2048)
 FIELDS = ["timestamp", "host", "device", "config", "batch", "rep", "status", "median_ms",
           "mean_ms", "first_step_ms", "memory_forward_mib", "memory_step_mib", "total_s",
           "wall_s", "parameters", "val_loss", "returncode", "error", "steps", "warmup",
-          "train_samples", "example", "python", "torch", "cuda", "gpu", "cpu", "platform"]
+          "train_samples", "example", "python", "torch", "cuda", "gpu", "cpu", "platform", "cse"]
 
 SUMMARY = re.compile(r"first step ([\d.]+) ms, then ([\d.]+) ms/step \(mean ([\d.]+), "
                      r"total ([\d.]+) s\)")
@@ -114,6 +118,29 @@ def example_name(example):
     return os.path.splitext(os.path.basename(example))[0]
 
 
+def output_path(path, example, cse):
+    """Name each example/CSE setting independently, including custom output stems."""
+    name = example_name(example)
+    path = path or f"sweep-{name}-{socket.gethostname()}.csv"
+    path = path.replace("{example}", name)
+    stem, extension = os.path.splitext(path)
+    if not re.search(rf"(?:^|[-_.]){re.escape(name)}(?:[-_.]|$)", os.path.basename(stem)):
+        stem += f"-{name}"
+    if not cse and not stem.endswith("-no-cse"):
+        stem += "-no-cse"
+    return os.path.abspath(stem + (extension or ".csv"))
+
+
+def matching_row(row, example, cse):
+    """Old CSVs predate the CSE flag and used its enabled default."""
+    return (not row.get("example") or example_name(row["example"]) == example_name(example)) and (
+        (row.get("cse") or "True").lower() == str(cse).lower())
+
+
+def log_path(output, config, device, batch, rep):
+    return f"{output}.{config}_{device}_b{batch}_r{rep}.log"
+
+
 def reference(example):
     """The implementation `example` is measured against."""
     return REFERENCE[example_name(example)]
@@ -147,6 +174,7 @@ def run(example, config, device, batch, rep, args, environ):
                "--steps", str(args.steps), "--warmup", str(args.warmup),
                "--train-samples", str(max(args.train_samples, batch)),
                "--val-samples", str(args.val_samples), "--print-interval", str(args.steps),
+               "--cse" if args.cse else "--no-cse",
                *CONFIGS[config]]
     if path := getattr(args, f"{implementation(config)}_path", None):
         command += [f"--{implementation(config)}-path", path]
@@ -166,7 +194,7 @@ def run(example, config, device, batch, rep, args, environ):
                returncode=returncode,
                error="", wall_s=round(wall, 1), steps=args.steps, warmup=args.warmup,
                train_samples=max(args.train_samples, batch),
-               example=os.path.basename(example), **environ)
+               example=os.path.basename(example), cse=args.cse, **environ)
     if match := SUMMARY.search(output):
         row.update(first_step_ms=match[1], median_ms=match[2], mean_ms=match[3],
                    total_s=match[4])
@@ -176,28 +204,49 @@ def run(example, config, device, batch, rep, args, environ):
         row.update(memory_forward_mib=match[1], memory_step_mib=match[2])
     if returncode or "median_ms" not in row:
         row.update(status="failed", error=classify(output))
-        with open(f"{args.output}.{config}_{device}_b{batch}.log", "w",
+        with open(log_path(args.output, config, device, batch, rep), "w",
                   encoding="utf-8") as log:  # Keep the whole thing, for the post mortem.
             log.write(" ".join(command) + "\n\n" + output)
     return row
 
 
 def write(path, row):
-    new = not os.path.exists(path)
+    new = not os.path.exists(path) or not os.path.getsize(path)
+    fields = FIELDS
+    old_rows = None
+    if not new:
+        with open(path, encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            fields = reader.fieldnames
+            if "cse" not in fields:
+                # Preserve existing columns/results when resuming an older sweep.
+                fields = [*fields, "cse"]
+                old_rows = [dict(old, cse=True) for old in reader]
+    if old_rows is not None:
+        descriptor, temporary = tempfile.mkstemp(dir=os.path.dirname(path) or ".")
+        try:
+            with os.fdopen(descriptor, "w", newline="", encoding="utf-8") as updated:
+                writer = csv.DictWriter(updated, fieldnames=fields)
+                writer.writeheader()
+                writer.writerows(old_rows)
+            os.replace(temporary, path)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
     with open(path, "a", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=FIELDS, extrasaction="ignore")
+        writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
         if new:
             writer.writeheader()
         writer.writerow(row)
 
 
-def completed(path):
+def completed(path, example, cse):
     """(config, device, batch, rep) of every run already in the csv, failures included."""
     if not os.path.exists(path):
         return {}
     with open(path, encoding="utf-8", newline="") as handle:
         return {(row["config"], row["device"], int(row["batch"]), int(row["rep"] or 1)):
-                row["status"] for row in csv.DictReader(handle)}
+                row["status"] for row in csv.DictReader(handle) if matching_row(row, example, cse)}
 
 
 def skip(config, device, example):
@@ -253,7 +302,7 @@ def table(best, oom, device, metric, title, ratio, example):
         print(str(batch).rjust(7) + "".join(cells))
 
 
-def summarize(path, example):
+def summarize(path, example, cse):
     """
     What the docs want: the faster of the reps, the speedup over the reference, and what each of
     them asked the card for, as flash-clifford reports it -- a forward on its own and a forward
@@ -262,6 +311,8 @@ def summarize(path, example):
     best, fastest, oom = {}, {}, set()
     with open(path, encoding="utf-8", newline="") as handle:
         for row in csv.DictReader(handle):
+            if not matching_row(row, example, cse):
+                continue
             key = (row["device"], row["config"], int(row["batch"]))
             if row["error"] == "out-of-memory":
                 oom.add(key)
@@ -285,12 +336,34 @@ def summarize(path, example):
               lambda baseline, value: value / baseline, example)
 
 
-def main():
+def example_args(args, example):
+    """Resolve presets independently, retaining each example's batch-size limit."""
+    args = argparse.Namespace(**vars(args))
+    args.example = os.path.abspath(example)
+    args.output = output_path(args.output, example, args.cse)
+    largest = LARGEST.get(example_name(example), CUDA_BATCHES[-1])
+    args.cuda_batches = args.cuda_batches or [b for b in CUDA_BATCHES if b <= largest]
+    if args.preset == "quick":
+        args.configs = list(FIRST)
+        args.cpu_batches = args.cuda_batches = [32, 512]
+        args.reps = 1
+    elif args.preset == "ends":
+        args.cpu_batches = [min(args.cpu_batches), max(args.cpu_batches)]
+        args.cuda_batches = [min(args.cuda_batches), max(args.cuda_batches)]
+        args.reps = 1
+    return args
+
+
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--example", default=os.path.join(os.path.dirname(__file__),
-                                                          "hulls.py"))
-    parser.add_argument("--output", default=f"sweep-{socket.gethostname()}.csv")
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--example", help="example script (default: examples/hulls.py)")
+    selection.add_argument("--all", action="store_true",
+                           help="run all CGENN examples sequentially: " + ", ".join(CGENN_EXAMPLES))
+    parser.add_argument("--output", help="CSV path/stem; example name is added if absent, or use {example}")
+    parser.add_argument("--cse", action=argparse.BooleanOptionalAction, default=True,
+                        help="enable Kingdon CSE (default: enabled); off runs use -no-cse filenames")
     parser.add_argument("--devices", nargs="*", choices=["cpu", "cuda"],
                         help="default: cpu, and cuda if torch can see one")
     parser.add_argument("--configs", nargs="*", default=list(CONFIGS), choices=list(CONFIGS))
@@ -312,31 +385,26 @@ def main():
     parser.add_argument("--retry-failed", action="store_true",
                         help="rerun rows the csv records as failed")
     parser.add_argument("--dry-run", action="store_true")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     # Each run is made from the example's own directory, so any path given here has to be
     # resolved against this one before it is handed on.
-    args.example = os.path.abspath(args.example)
     for name in dict.fromkeys(REFERENCE.values()):
         if path := getattr(args, f"{name}_path"):
             setattr(args, f"{name}_path", os.path.abspath(path))
-    largest = LARGEST.get(example_name(args.example), CUDA_BATCHES[-1])
-    args.cuda_batches = args.cuda_batches or [b for b in CUDA_BATCHES if b <= largest]
-
-    if args.preset == "quick":  # Twenty minutes, to check the machine before the long night.
-        args.configs = list(FIRST)
-        args.cpu_batches = args.cuda_batches = [32, 512]
-        args.reps = 1
-    elif args.preset == "ends":  # Where the host and where the card sets the pace, in a fraction of the full run; a later full run into the same csv fills in the rest.
-        args.cpu_batches = [min(args.cpu_batches), max(args.cpu_batches)]
-        args.cuda_batches = [min(args.cuda_batches), max(args.cuda_batches)]
-        args.reps = 1
-
     environ = environment(args.python)
-    done = completed(args.output)
+    examples = ([os.path.join(os.path.dirname(__file__), f"{name}.py") for name in CGENN_EXAMPLES]
+                if args.all else [args.example or os.path.join(os.path.dirname(__file__), "hulls.py")])
+    for example in examples:
+        sweep(example_args(args, example), environ)
+
+
+def sweep(args, environ):
+    done = completed(args.output, args.example, args.cse)
     keep = {"ok"} if args.retry_failed else {"ok", "failed", "skipped"}
     runs = [r for r in plan(args, has_cuda=bool(environ["gpu"])) if done.get(r) not in keep]
 
-    print(f"{environ['gpu'] or 'no gpu'}, torch {environ['torch']}, "
+    print(f"\n{example_name(args.example)}, CSE={args.cse}: "
+          f"{environ['gpu'] or 'no gpu'}, torch {environ['torch']}, "
           f"cuda {environ['cuda'] or 'none'}, python {environ['python']}")
     print(f"{len(runs)} runs to go, {len(done)} already in {args.output}")
     if (os.name == "nt" and not shutil.which("cl")
@@ -353,6 +421,8 @@ def main():
             print(f"  {device:5s} {config:20s} batch {batch:5d} rep {rep}")
         return
 
+    os.makedirs(os.path.dirname(args.output), exist_ok=True)
+
     blocked = set()  # (config, device) that has already failed, at a smaller batch size.
     for config, device, batch, rep in runs:
         if (config, device) in blocked:
@@ -361,7 +431,8 @@ def main():
             write(args.output, dict(timestamp=time.strftime("%Y-%m-%d %H:%M:%S"),
                                     host=socket.gethostname(), device=device, config=config,
                                     batch=batch, rep=rep, status="skipped",
-                                    error="failed at a smaller batch size", **environ))
+                                    error="failed at a smaller batch size",
+                                    example=os.path.basename(args.example), cse=args.cse, **environ))
             continue
 
         print(f"[{time.strftime('%H:%M:%S')}] {config} {device} b{batch} rep {rep} ...",
@@ -375,10 +446,11 @@ def main():
                      else ""), flush=True)
         else:
             print(f"    {row['error']} after {row['wall_s']} s, see "
-                  f"{args.output}.{config}_{device}_b{batch}.log", flush=True)
+                  f"{log_path(args.output, config, device, batch, rep)}", flush=True)
             blocked.add((config, device))
 
-    summarize(args.output, args.example)
+    if os.path.exists(args.output):
+        summarize(args.output, args.example, args.cse)
     print(f"\nresults: {args.output}")
 
 

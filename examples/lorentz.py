@@ -137,7 +137,7 @@ def cgenn(args):
     from kingdon import Algebra
     from models.lorentz_cggnn import LorentzCGGNN
 
-    algebra = Algebra(1, 3, backend="torch")
+    algebra = Algebra(1, 3, backend="torch", cse=getattr(args, "cse", True))
     model = LorentzCGGNN(hidden_features_x=args.hidden_features, n_layers=args.num_layers).to(args.device)
 
     def loss_fn(momenta, label):

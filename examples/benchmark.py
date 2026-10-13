@@ -52,8 +52,8 @@ def mse_loss(prediction: MultiVector, target: MultiVector) -> torch.Tensor:
 
 
 def codegen(args):
-    """Keyword arguments for :class:`Algebra`: which backend, and whether to compile."""
-    kwargs = dict(backend=args.backend)
+    """Keyword arguments for :class:`Algebra`: backend, CSE and compilation."""
+    kwargs = dict(backend=args.backend, cse=getattr(args, "cse", True))
     if args.compile == "operators":
         kwargs["wrapper"] = torch.compile
     return kwargs
@@ -146,7 +146,7 @@ def train(args, task):
         # lazy layers size their parameters there too. So run once before compiling.
         loss_fn(*(t[:args.batch_size] for t in train_set))
         loss_fn = torch.compile(loss_fn, mode="reduce-overhead" if args.compile == "graphs" else None)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, fused=True)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, fused=args.device.startswith("cuda"))
 
     times = []
     for step in range(args.steps):
@@ -155,6 +155,8 @@ def train(args, task):
         index = order[step % per_epoch * args.batch_size:][:args.batch_size]
         batch = [t[index] for t in train_set]
 
+        if args.compile == "graphs":
+            torch.compiler.cudagraph_mark_step_begin()
         synchronize(args.device)
         start = time.perf_counter()
         loss = loss_fn(*batch)
@@ -202,10 +204,12 @@ def run(task):
     parser.add_argument("--backend", choices=["torch", "triton"], default="torch",
                         help="how kingdon emits its operators: as torch calls, or each as "
                              "one triton kernel forward and one backward")
+    parser.add_argument("--cse", action=argparse.BooleanOptionalAction, default=True,
+                        help="enable Kingdon common subexpression elimination (default: enabled)")
     parser.add_argument("--compile", choices=["none", "operators", "model", "graphs"], default="none",
                         help="compile every operator kingdon generates, which hands torch.compile "
                              "to kingdon as its wrapper, or the model as a whole, which graphs "
-                             "then replays as CUDA graphs, leaving the launches out of a step")
+                             "replays through torch.compile reduce-overhead mode")
     for impl, checkout in REFERENCES.items():
         parser.add_argument(f"--{impl}-path",
                             default=os.path.join(os.path.dirname(__file__), "..", "..", checkout))
