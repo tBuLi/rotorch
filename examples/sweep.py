@@ -17,6 +17,10 @@ faster run can be kept and so that a compiled run is seen once cold and once war
     python examples/sweep.py --no-cse               # disable Kingdon CSE
     python examples/sweep.py --dry-run              # print the plan and stop
 
+Every row records the CSE policy and the revision of the kingdon checkout it ran, and a rotorch
+row is only taken as done for the revision it ran: the triton rows of a --no-cse sweep from before
+that column ran kingdon's CSE regardless, and are not comparable.
+
 Every example is measured against the implementation of its own paper, which for the cgenn
 examples is cgenn and for gravity is GATr, so the reference columns follow the example.
 
@@ -79,7 +83,8 @@ LARGEST = dict(nbody=2048)
 FIELDS = ["timestamp", "host", "device", "config", "batch", "rep", "status", "median_ms",
           "mean_ms", "first_step_ms", "memory_forward_mib", "memory_step_mib", "total_s",
           "wall_s", "parameters", "val_loss", "returncode", "error", "steps", "warmup",
-          "train_samples", "example", "python", "torch", "cuda", "gpu", "cpu", "platform", "cse"]
+          "train_samples", "example", "python", "torch", "cuda", "gpu", "cpu", "platform", "cse",
+          "kingdon"]
 
 SUMMARY = re.compile(r"first step ([\d.]+) ms, then ([\d.]+) ms/step \(mean ([\d.]+), "
                      r"total ([\d.]+) s\)")
@@ -131,10 +136,15 @@ def output_path(path, example, cse):
     return os.path.abspath(stem + (extension or ".csv"))
 
 
-def matching_row(row, example, cse):
-    """Old CSVs predate the CSE flag and used its enabled default."""
-    return (not row.get("example") or example_name(row["example"]) == example_name(example)) and (
-        (row.get("cse") or "True").lower() == str(cse).lower())
+def matching_row(row, example, cse, kingdon):
+    """
+    A row of this example and CSE setting, where old CSVs predate the CSE flag and used its enabled
+    default, and of rotorch's own columns, which measure kingdon's code, one of this `kingdon`
+    revision: a row from before that column measured another.
+    """
+    return ((not row.get("example") or example_name(row["example"]) == example_name(example))
+            and (row.get("cse") or "True").lower() == str(cse).lower()
+            and (row["config"] in CONFIGS and implementation(row["config"]) != "rotorch" or row.get("kingdon") == kingdon))
 
 
 def log_path(output, config, device, batch, rep):
@@ -148,12 +158,13 @@ def reference(example):
 
 def environment(python):
     """Ask the interpreter that will run the benchmarks what it is about to run them on."""
-    code = ("import json, platform, torch;"
+    code = (f"import json, platform, sys, torch; sys.path.insert(0, {os.path.dirname(os.path.abspath(__file__))!r}); import benchmark;"
             "print(json.dumps({'python': platform.python_version(),"
             "'torch': torch.__version__,"
             "'cuda': torch.version.cuda or '',"
             "'gpu': torch.cuda.get_device_name(0) if torch.cuda.is_available() else '',"
-            "'cpu': platform.processor(), 'platform': platform.platform()}))")
+            "'cpu': platform.processor(), 'platform': platform.platform(),"
+            "'kingdon': benchmark.revision()}))")
     probe = subprocess.run([python, "-c", code], capture_output=True, text=True)
     if probe.returncode:
         raise SystemExit(f"Could not import torch with {python}:\n{probe.stderr}")
@@ -218,10 +229,10 @@ def write(path, row):
         with open(path, encoding="utf-8", newline="") as handle:
             reader = csv.DictReader(handle)
             fields = reader.fieldnames
-            if "cse" not in fields:
-                # Preserve existing columns/results when resuming an older sweep.
-                fields = [*fields, "cse"]
-                old_rows = [dict(old, cse=True) for old in reader]
+            if missing := [name for name in FIELDS if name not in fields]:
+                # Preserve existing columns/results when resuming an older sweep, whose rows all had CSE on.
+                fields = [*fields, *missing]
+                old_rows = [{**dict.fromkeys(missing, ""), **({"cse": True} if "cse" in missing else {}), **old} for old in reader]
     if old_rows is not None:
         descriptor, temporary = tempfile.mkstemp(dir=os.path.dirname(path) or ".")
         try:
@@ -240,13 +251,13 @@ def write(path, row):
         writer.writerow(row)
 
 
-def completed(path, example, cse):
+def completed(path, example, cse, kingdon):
     """(config, device, batch, rep) of every run already in the csv, failures included."""
     if not os.path.exists(path):
         return {}
     with open(path, encoding="utf-8", newline="") as handle:
         return {(row["config"], row["device"], int(row["batch"]), int(row["rep"] or 1)):
-                row["status"] for row in csv.DictReader(handle) if matching_row(row, example, cse)}
+                row["status"] for row in csv.DictReader(handle) if matching_row(row, example, cse, kingdon)}
 
 
 def skip(config, device, example):
@@ -302,7 +313,7 @@ def table(best, oom, device, metric, title, ratio, example):
         print(str(batch).rjust(7) + "".join(cells))
 
 
-def summarize(path, example, cse):
+def summarize(path, example, cse, kingdon):
     """
     What the docs want: the faster of the reps, the speedup over the reference, and what each of
     them asked the card for, as flash-clifford reports it -- a forward on its own and a forward
@@ -311,7 +322,7 @@ def summarize(path, example, cse):
     best, fastest, oom = {}, {}, set()
     with open(path, encoding="utf-8", newline="") as handle:
         for row in csv.DictReader(handle):
-            if not matching_row(row, example, cse):
+            if not matching_row(row, example, cse, kingdon):
                 continue
             key = (row["device"], row["config"], int(row["batch"]))
             if row["error"] == "out-of-memory":
@@ -399,7 +410,7 @@ def main(argv=None):
 
 
 def sweep(args, environ):
-    done = completed(args.output, args.example, args.cse)
+    done = completed(args.output, args.example, args.cse, environ["kingdon"])
     keep = {"ok"} if args.retry_failed else {"ok", "failed", "skipped"}
     runs = [r for r in plan(args, has_cuda=bool(environ["gpu"])) if done.get(r) not in keep]
 
@@ -450,7 +461,7 @@ def sweep(args, environ):
             blocked.add((config, device))
 
     if os.path.exists(args.output):
-        summarize(args.output, args.example, args.cse)
+        summarize(args.output, args.example, args.cse, environ["kingdon"])
     print(f"\nresults: {args.output}")
 
 

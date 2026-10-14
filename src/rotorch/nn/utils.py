@@ -44,6 +44,17 @@ def materialize_constants(mv: MultiVector) -> MultiVector:
     return mv
 
 
+def received(X: MultiVector, features: int, *keys: int) -> MultiVector:
+    """
+    What a module after one taking X is given, as far as it sizes itself by it: the keys of X and `keys`, over `features` features.
+    A symbolic multivector, so that a layer sizes its modules without running them, which would compile and launch what it never uses again.
+    """
+    alg, have = X.algebra, {*materialize_constants(X).keys(), *keys}
+    Y = alg.multivector(name="y", keys=tuple(k for k in alg.canon2bin.values() if k in have))
+    Y.shape = (features,)
+    return Y
+
+
 def insert_out_features(X: MultiVector) -> MultiVector:
     """Make room for the output features, so that the weights broadcast over them."""
     return einops.rearrange(materialize_constants(X), "... f -> ... 1 f")

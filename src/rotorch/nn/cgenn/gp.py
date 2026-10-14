@@ -23,8 +23,14 @@ def paths(X: MultiVector, Y: MultiVector):
         yield from (Z.grade(gz) for gz in Z.grades)
 
 
+def grade_paths(X: MultiVector, Y: MultiVector) -> list[tuple[int, int, int]]:
+    """The :func:`paths` of X and Y as the grades of X, of Y and of their product, from their keys alone, in the order of their weights."""
+    alg = X.algebra
+    return sorted({(a.bit_count(), b.bit_count(), (a ^ b).bit_count()) for a in X.keys() for b in Y.keys() if alg.signs[a, b]})
+
+
 def number_of_weights_wgp(X: MultiVector, Y: MultiVector) -> int:
-    return sum(1 for _ in paths(X, Y))
+    return len(grade_paths(materialize_constants(X), materialize_constants(Y)))
 
 
 def cayley(X: MultiVector, Y: MultiVector) -> tuple[MultiVector, MultiVector]:
@@ -35,7 +41,7 @@ def cayley(X: MultiVector, Y: MultiVector) -> tuple[MultiVector, MultiVector]:
     alg, at = X.algebra, {b: j for j, b in enumerate(Y.keys())}
     sign = lambda a, c: alg.signs[a, a ^ c] if a ^ c in at else 0
     keys = tuple(c for c in alg.indices_for_grades(tuple(range(alg.d + 1))) if any(sign(a, c) for a in X.keys()))
-    path = {p: k for k, p in enumerate(sorted({(a.bit_count(), b.bit_count(), (a ^ b).bit_count()) for a in X.keys() for b in Y.keys() if alg.signs[a, b]}))}
+    path = {p: k for k, p in enumerate(grade_paths(X, Y))}
     J = [[at.get(a ^ c, 0) for a in X.keys()] for c in keys]
     P = [[path[a.bit_count(), (a ^ c).bit_count(), c.bit_count()] + len(path) * (sign(a, c) < 0) if sign(a, c) else 2 * len(path) for a in X.keys()] for c in keys]
     return tuple(alg.mvtype.fromkeysvalues(alg, keys, rows, raw=True) for rows in (J, P))

@@ -5,7 +5,10 @@ training loop over either implementation so that their timings can be compared.
 An example describes itself with a :class:`Task` and calls :func:`run`.
 """
 import argparse
+import hashlib
 import os
+import shutil
+import subprocess
 import sys
 import time
 from contextlib import contextmanager
@@ -49,6 +52,19 @@ def mse_loss(prediction: MultiVector, target: MultiVector) -> torch.Tensor:
     """
     difference = prediction - target
     return mag2(difference).mean() / len(difference.keys())
+
+
+def revision():
+    """
+    The commit of the kingdon checkout in use, marked dirty where its working tree differs from it,
+    with a hash of how its source does, which tells two dirty trees apart; without git, kingdon's version.
+    """
+    import kingdon
+    if not (git := shutil.which("git")):
+        return kingdon.__version__
+    run = lambda *command: subprocess.run([git, *command], cwd=os.path.dirname(kingdon.__file__), capture_output=True).stdout
+    commit = run("describe", "--always", "--dirty").decode().strip()
+    return f"{commit}-{hashlib.sha256(run('diff', 'HEAD', '--', '.')).hexdigest()[:12]}" if commit.endswith("-dirty") else commit or kingdon.__version__
 
 
 def codegen(args):
@@ -173,6 +189,7 @@ def train(args, task):
     warm = torch.tensor(times[args.warmup:] or times)  # Keep the stats sane for short runs.
     print(f"\n{task.name}, {args.impl}: {n_parameters} parameters, "
           f"val loss {evaluate(loss_fn, val_loader, args.device):.4f}")
+    print(f"  kingdon {revision()}, cse {getattr(args, 'cse', True)}")
     print(f"  first step {times[0] * 1e3:.0f} ms, then {warm.median() * 1e3:.1f} ms/step "
           f"(mean {warm.mean() * 1e3:.1f}, total {sum(times):.1f} s)")
     if args.device.startswith("cuda"):  # How much of the card a batch this size needs.
@@ -219,4 +236,6 @@ def run(task):
     if args.impl != "rotorch" and (args.compile == "operators" or args.backend != "torch"):
         raise SystemExit("--backend and --compile operators are about the operators kingdon "
                          "generates, so rotorch only.")
+    if args.backend == "triton" and not args.device.startswith("cuda"):
+        raise SystemExit("--backend triton runs on a cuda --device only; --backend torch runs anywhere.")
     train(args, task)

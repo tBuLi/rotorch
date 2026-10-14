@@ -6,7 +6,8 @@ from kingdon import MultiVector, add_operator
 from kingdon.multivector import Scalar
 
 from ...nn.cgenn import FullyConnectedGeometricProduct, MVSiLU, fc_geometric_product, mvsilu
-from ...nn.utils import materialize_constants
+from ...nn.cgenn.gp import cayley
+from ...nn.utils import materialize_constants, received
 
 
 @add_operator(symbolic=True, codegen_symbolcls=sympy.Symbol)
@@ -45,9 +46,13 @@ class O3CGMLP(nn.Module):
 
     def forward(self, input: MultiVector) -> MultiVector:
         first, *silus, last = self.net
-        # Each module takes what the one before it gives, so they size themselves by running once. An isinstance, unlike has_uninitialized_params, torch.compile traces through.
+        # The modules after the first product take its features and keys: those of its input, of its linear map's bias and of its product. An isinstance, unlike has_uninitialized_params, torch.compile traces through.
         if isinstance(last.weight, UninitializedParameter):
-            self.net(input)
+            first.initialize_parameters(input)
+            X = materialize_constants(input)
+            hidden = received(X, first.out_features, 0, *cayley(X, X)[0].keys())
+            for module in (*silus, last):
+                module.initialize_parameters(hidden)
         scalar = input.algebra.scalar
         X = mvsilus(materialize_constants(first(input)), scalar(e=torch.cat([m.a for m in silus])), scalar(e=torch.cat([m.b for m in silus])))
         params = last.linear_right.weight, last.normalization.a, last.linear_left.weight, last.linear_left.bias, last.weight

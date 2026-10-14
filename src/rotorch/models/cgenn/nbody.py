@@ -5,7 +5,7 @@ from kingdon import MultiVector, add_operator
 from kingdon.multivector import Scalar
 
 from ...nn.cgenn import GeometricProduct, MVLayerNorm, MVLinear, MVSiLU, geometric_product, gradewise_linear, layernorm, mvsilu
-from ...nn.utils import cat, materialize_constants, segment_mean
+from ...nn.utils import cat, materialize_constants, received, segment_mean
 
 
 @add_operator(symbolic=True, codegen_symbolcls=sympy.Symbol)
@@ -19,9 +19,12 @@ class CEMLPLayer(nn.Sequential):
 
     def forward(self, X: MultiVector) -> MultiVector:
         lin, silu, gp, norm = self
-        # Each module takes what the one before it gives, so they size themselves by running once. An isinstance, unlike has_uninitialized_params, torch.compile traces through.
+        # The modules after the linear map take its features and keys, a scalar its bias adds among them. An isinstance, unlike has_uninitialized_params, torch.compile traces through.
         if isinstance(lin.weight, UninitializedParameter):
-            super().forward(X)
+            lin.initialize_parameters(X)
+            hidden = received(X, lin.out_features, *([0] if lin.bias is not None else []))
+            for module in (silu, gp, norm):
+                module.initialize_parameters(hidden)
         params = lin.weight, lin.bias, silu.a, silu.b, gp.linear_right.weight, gp.normalization.a, gp.linear_left.weight, gp.linear_left.bias, gp.weight, norm.a
         return cemlp_layer(materialize_constants(X), *(X.algebra.scalar(e=p) for p in params))
 

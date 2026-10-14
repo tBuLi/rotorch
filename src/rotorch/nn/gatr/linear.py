@@ -7,7 +7,7 @@ from torch.nn.parameter import UninitializedParameter
 from torch import nn
 from kingdon import MultiVector, add_operator
 
-from ..utils import degenerate, insert_out_features, materialize_constants
+from ..utils import degenerate, insert_out_features, materialize_constants, received
 
 # How much of the variance a layer is meant to pass on, over the multivectors and over the
 # scalars, and where to sit its bias. `small` quietens the branch of a residual, and
@@ -78,7 +78,7 @@ class EquiLinear(LazyModuleMixin, nn.Module):
         with torch.no_grad():
             # Which maps there are depends on the grades the input turns out to carry, so a sparse
             # input, a point say, is a layer with fewer weights rather than one full of zeros.
-            self.maps = [label for label, _ in equivariant_maps(materialize_constants(input))]
+            self.maps = [label for label, _ in equivariant_maps(received(input, self.in_features))]
             self.weight.materialize((len(self.maps), self.out_features, self.in_features))
             self.reset_parameters()
 

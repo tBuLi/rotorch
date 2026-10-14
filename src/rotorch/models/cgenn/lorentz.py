@@ -10,7 +10,7 @@ from kingdon import MultiVector, add_operator
 from kingdon.multivector import Scalar
 
 from ...nn.cgenn import FullyConnectedGeometricProduct, MVLayerNorm, MVLinear, fc_geometric_product, fc_geometric_product_unnormalized, layernorm
-from ...nn.utils import cat, invariants, materialize_constants, segment_mean, sigmoid
+from ...nn.utils import cat, invariants, materialize_constants, received, segment_mean, sigmoid
 
 
 def invariant_features(X: MultiVector) -> MultiVector:
@@ -45,10 +45,9 @@ def scalar_mlp(features, bias=True, activate=False):
 
 
 @add_operator(symbolic=True, codegen_symbolcls=sympy.Symbol)
-def grade_gate(X: MultiVector, H, W: Scalar[None], b: Scalar[None]) -> MultiVector:
-    """:class:`GradeGate`, with W[k] and b[k] the map from the hidden features H to the gates of the k-th grade of X."""
-    k = X.gradeidx_of_blades
-    return einops.einsum(X, (einops.einsum(H, W[k], "... h, f h -> ... f") + b[k]).map(sigmoid), "... f, ... f -> ... f")
+def grade_gate(X: MultiVector, H, W: Scalar, b: Scalar) -> MultiVector:
+    """:class:`GradeGate`, with W[k] and b[k] the map from the hidden features H to the gates of the k-th grade of X: a gate per grade, which its blades share."""
+    return einops.einsum(X, (einops.einsum(H, W, "... h, k f h -> k ... f") + b).map(sigmoid)[X.gradeidx_of_blades], "... f, ... f -> ... f")
 
 
 class GradeGate(LazyModuleMixin, nn.Module):
@@ -86,8 +85,9 @@ class GradeGate(LazyModuleMixin, nn.Module):
         nn.init.uniform_(self.bias, -bound, bound)
 
     def forward(self, input: MultiVector, h: MultiVector) -> MultiVector:
-        input = materialize_constants(input)
-        return grade_gate(input, self.hidden(h), *(input.algebra.scalar(e=p) for p in (self.weight, self.bias)))
+        input, hidden = materialize_constants(input), self.hidden(h)
+        bias = self.bias.view(len(self.bias), *(1,) * (len(hidden.shape) - 1), self.features)  # A unit axis for each batch axis of the hidden features, to broadcast over.
+        return grade_gate(input, hidden, *(input.algebra.scalar(e=p) for p in (self.weight, bias)))
 
 
 @add_operator(symbolic=True, codegen_symbolcls=sympy.Symbol)
@@ -107,9 +107,10 @@ class FCLayer(nn.Sequential):
 
     def forward(self, X: MultiVector) -> MultiVector:
         fc, norm = self
-        # The norm takes what the product gives, so they size themselves by running once. An isinstance, unlike has_uninitialized_params, torch.compile traces through.
+        # The norm takes the features of the product. An isinstance, unlike has_uninitialized_params, torch.compile traces through.
         if isinstance(fc.weight, UninitializedParameter):
-            super().forward(X)
+            fc.initialize_parameters(X)
+            norm.initialize_parameters(received(X, fc.out_features))
         normalization = () if fc.normalization is None else (fc.normalization.a,)
         params = fc.linear_right.weight, *normalization, fc.linear_left.weight, fc.linear_left.bias, fc.weight, norm.a
         X = materialize_constants(X)
