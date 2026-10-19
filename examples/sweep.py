@@ -87,8 +87,6 @@ CUDA_BATCHES = [32, 128, 512, 2048, 4096, 8192, 16384]
 # Where an example's batches stop by default. An n-body sample is a graph of five bodies and twenty edges, twenty times the others'.
 # Lorentz's b2048 took most of the hour a run gets on the cpu.
 LARGEST = dict(nbody=2048, lorentz=1024)
-# The examples whose kernels' registers, shared memory and scratch have not been bounded on a card yet: Lorentz, and GATr's PGA.
-CPU_ONLY = ("lorentz", "gravity")
 
 FIELDS = ["timestamp", "host", "device", "config", "batch", "rep", "status", "median_ms",
           "mean_ms", "first_step_ms", "memory_forward_mib", "memory_step_mib", "memory_held_mib",
@@ -330,12 +328,9 @@ def completed(path, example, cse, kingdon):
 def skip(config, device, example):
     """
     There is no cpu triton, nor cpu graphs: the flag is ignored and the run is a second run of
-    another column. The examples in CPU_ONLY stay off the card. And the reference columns of the
-    other papers are not this example's to run.
+    another column. And the reference columns of the other papers are not this example's to run.
     """
     if device == "cpu" and ("triton" in CONFIGS[config] or "graphs" in CONFIGS[config]):
-        return True
-    if device == "cuda" and example_name(example) in CPU_ONLY:
         return True
     return implementation(config) not in ("rotorch", reference(example))
 
@@ -423,8 +418,8 @@ def example_args(args, example):
     args.example = os.path.abspath(example)
     args.output = output_path(args.output, example, args.cse)
     largest = LARGEST.get(example_name(example), math.inf)
-    args.cpu_batches = args.cpu_batches or [b for b in CPU_BATCHES if b <= largest]
-    args.cuda_batches = args.cuda_batches or [b for b in CUDA_BATCHES if b <= largest]
+    args.cpu_batches = args.cpu_batches or sorted({min(b, largest) for b in CPU_BATCHES})
+    args.cuda_batches = args.cuda_batches or sorted({min(b, largest) for b in CUDA_BATCHES})
     if args.preset == "quick":
         args.configs = list(FIRST)
         args.cpu_batches = args.cuda_batches = [32, 512]
