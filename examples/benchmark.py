@@ -7,6 +7,7 @@ An example describes itself with a :class:`Task` and calls :func:`run`.
 import argparse
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -16,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 import numpy as np
+import rotorch
 import torch
 from rotorch.nn.utils import mag2
 from kingdon import MultiVector
@@ -25,6 +27,8 @@ from torch.utils.data import DataLoader, TensorDataset
 # names double as the names of the options that point at those checkouts.
 REFERENCES = dict(cgenn="clifford-group-equivariant-neural-networks",
                   gatr="geometric-algebra-transformer")
+# The environment variables the compilers read, some of which change what they print or how long they take.
+ENVIRONMENT = re.compile("TRITON|TORCH|INDUCTOR|CUDA|MLIR|LLVM|PTXAS")
 
 
 @dataclass
@@ -54,17 +58,23 @@ def mse_loss(prediction: MultiVector, target: MultiVector) -> torch.Tensor:
     return mag2(difference).mean() / len(difference.keys())
 
 
-def revision():
+def revision(path=None):
     """
-    The commit of the kingdon checkout in use, marked dirty where its working tree differs from it,
-    with a hash of how its source does, which tells two dirty trees apart; without git, kingdon's version.
+    The commit of the checkout at `path`, by default the kingdon in use, marked dirty where its working tree differs from it,
+    with a hash of how its source does, which tells two dirty trees apart; without git, kingdon's version, or nothing for another `path`.
     """
     import kingdon
-    if not (git := shutil.which("git")):
-        return kingdon.__version__
-    run = lambda *command: subprocess.run([git, *command], cwd=os.path.dirname(kingdon.__file__), capture_output=True).stdout
+    fallback = "" if path else kingdon.__version__
+    if not (git := shutil.which("git")) or path and not os.path.isdir(path):
+        return fallback
+    run = lambda *command: subprocess.run([git, *command], cwd=path or os.path.dirname(kingdon.__file__), capture_output=True).stdout
     commit = run("describe", "--always", "--dirty").decode().strip()
-    return f"{commit}-{hashlib.sha256(run('diff', 'HEAD', '--', '.')).hexdigest()[:12]}" if commit.endswith("-dirty") else commit or kingdon.__version__
+    return f"{commit}-{hashlib.sha256(run('diff', 'HEAD', '--', '.')).hexdigest()[:12]}" if commit.endswith("-dirty") else commit or fallback
+
+
+def log(message):
+    """`message`, timed, so that a log shows how long each phase of a run took, and where one that never finished got to."""
+    print(f"[{time.strftime('%H:%M:%S')}] {message}", flush=True)
 
 
 def codegen(args):
@@ -125,8 +135,8 @@ def dataset(task, data_dir, split, n_samples, seed):
     if not os.path.exists(path):
         os.makedirs(data_dir, exist_ok=True)
         np.savez(path, *task.generate(n_samples, seed))
-    with np.load(path) as data:
-        return TensorDataset(*(torch.from_numpy(data[name]) for name in data.files))
+    with np.load(path) as data:  # Contiguous, as a model may view what it is given: numpy's fancy indexing can leave an array in fortran order.
+        return TensorDataset(*(torch.from_numpy(np.ascontiguousarray(data[name])) for name in data.files))
 
 
 def evaluate(loss_fn, loader, device):
@@ -140,6 +150,13 @@ def train(args, task):
         raise SystemExit(f"--train-samples {args.train_samples} is below --batch-size "
                          f"{args.batch_size}, which leaves no batch to train on.")
     torch.manual_seed(args.seed)
+    reference = getattr(args, f"{args.impl}_path", None)
+    log(f"run {vars(args)}")
+    log(f"kingdon {revision()}, rotorch {revision(os.path.dirname(rotorch.__file__))}" + (f", {args.impl} {revision(reference)}" if reference else ""))
+    log(f"environment {({k: v for k, v in os.environ.items() if ENVIRONMENT.search(k)})}")
+    if args.device.startswith("cuda"):
+        log(f"device {torch.cuda.get_device_properties(args.device)}")
+    log("data")
     data_dir = args.data_dir or os.path.join(os.environ.get("DATAROOT", "data"), task.name)
     # The training set lives on the device and every batch is drawn there.
     train_set = [t.to(args.device) for t in dataset(task, data_dir, "train", args.train_samples, seed=0).tensors]
@@ -147,8 +164,9 @@ def train(args, task):
     val_loader = DataLoader(dataset(task, data_dir, "val", args.val_samples, seed=1),
                             batch_size=args.batch_size)
 
-    if args.impl in REFERENCES:
-        sys.path.insert(0, getattr(args, f"{args.impl}_path"))
+    log("model")
+    if reference:
+        sys.path.insert(0, reference)
     try:
         model, loss_fn = task.models[args.impl](args)
     except ModuleNotFoundError as error:
@@ -160,10 +178,12 @@ def train(args, task):
     if args.compile in ("model", "graphs"):
         # kingdon generates its operators on the first call, which dynamo cannot trace, and the
         # lazy layers size their parameters there too. So run once before compiling.
+        log("initialize")
         loss_fn(*(t[:args.batch_size] for t in train_set))
         loss_fn = torch.compile(loss_fn, mode="reduce-overhead" if args.compile == "graphs" else None)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, fused=args.device.startswith("cuda"))
 
+    log("train")
     times = []
     for step in range(args.steps):
         if step % per_epoch == 0:
@@ -183,16 +203,19 @@ def train(args, task):
         times.append(time.perf_counter() - start)
 
         if step % args.print_interval == 0:
-            print(f"step {step:5d}  train loss {loss.item():9.4f}")
+            log(f"step {step:5d}  train loss {loss.item():9.4f}")
 
     n_parameters = sum(p.numel() for p in model.parameters())  # Lazy layers exist by now.
     warm = torch.tensor(times[args.warmup:] or times)  # Keep the stats sane for short runs.
-    print(f"\n{task.name}, {args.impl}: {n_parameters} parameters, "
-          f"val loss {evaluate(loss_fn, val_loader, args.device):.4f}")
-    print(f"  kingdon {revision()}, cse {getattr(args, 'cse', True)}")
+    log("validate")
+    val_loss = evaluate(loss_fn, val_loader, args.device)
+    print(f"\n{task.name}, {args.impl}: {n_parameters} parameters, val loss {val_loss:.4f}")
     print(f"  first step {times[0] * 1e3:.0f} ms, then {warm.median() * 1e3:.1f} ms/step "
           f"(mean {warm.mean() * 1e3:.1f}, total {sum(times):.1f} s)")
     if args.device.startswith("cuda"):  # How much of the card a batch this size needs.
+        print(f"  peak {torch.cuda.max_memory_allocated() / 2 ** 20:.1f} MiB allocated, {torch.cuda.max_memory_reserved() / 2 ** 20:.1f} MiB reserved, "
+              f"over initialization, training and validation")
+        log("memory")
         # As a step starts: a backward adding to the gradients of the last one would add to what a CUDA graph's replay has since overwritten.
         optimizer.zero_grad()
         forward, forward_backward, held = memory(loss_fn, batch, args.device)

@@ -24,10 +24,12 @@ that column ran kingdon's CSE regardless, and are not comparable.
 Every example is measured against the implementation of its own paper, which for the cgenn
 examples is cgenn and for gravity is GATr, so the reference columns follow the example.
 
-Each run is a separate process, so one that dies takes its row down and nothing else. The csv
-is appended to as results land and is re-read on startup, so the sweep can be interrupted and
-restarted and will pick up where it left off. A configuration that fails at one batch size is
-not tried at a larger one, since these failures are failures of size.
+Each run is a separate process, so one that dies takes its row down and nothing else, and it
+writes everything it prints to a log of its own as it goes, which is kept however the run ends.
+The csv is appended to as results land and is re-read on startup, so the sweep can be
+interrupted and restarted and will pick up where it left off. A configuration that fails is not
+tried again, at any batch size, and the rows it leaves out name the run they wait on; an error
+that may have taken the card with it stops everything on that device.
 
 The whole thing is a few hours, most of it compiling: every batch size compiles anew.
 :code:`--cuda-batches` and :code:`--cpu-batches` are the dials if that is too much, and
@@ -37,15 +39,19 @@ The cgenn columns need its checkout on :code:`--cgenn-path`, plus pyyaml, scipy 
 scikit-learn; the GATr columns need its checkout on :code:`--gatr-path`, plus xformers, which
 it imports whether or not the attention ever dispatches to it. None of these are rotorch's own
 dependencies. The triton columns need a gpu; on the cpu the flag does nothing and the run would
-only repeat the plain rotorch one, so they are left out of the plan.
+only repeat the plain rotorch one, so they are left out of the plan. The compiled cpu columns need
+a c++ compiler that inductor can use, which is tried once before they run.
 """
 import argparse
 import csv
+import functools
 import json
+import math
 import os
 import platform
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -76,26 +82,32 @@ FIRST = ("cgenn", "gatr", "rotorch", "rotorch-triton")
 REFERENCE = dict(hulls="cgenn", lorentz="cgenn", nbody="cgenn", o3="cgenn", o5="cgenn",
                  gravity="gatr")
 CGENN_EXAMPLES = tuple(name for name, impl in REFERENCE.items() if impl == "cgenn")
+CPU_BATCHES = [32, 128, 512, 2048]
 CUDA_BATCHES = [32, 128, 512, 2048, 4096, 8192, 16384]
-# Where an example's cuda batches stop by default. An n-body sample is a graph of five bodies and twenty edges, twenty times the others'.
-LARGEST = dict(nbody=2048)
+# Where an example's batches stop by default. An n-body sample is a graph of five bodies and twenty edges, twenty times the others'.
+# Lorentz's b2048 took most of the hour a run gets on the cpu.
+LARGEST = dict(nbody=2048, lorentz=1024)
+# The examples whose kernels' registers, shared memory and scratch have not been bounded on a card yet: Lorentz, and GATr's PGA.
+CPU_ONLY = ("lorentz", "gravity")
 
 FIELDS = ["timestamp", "host", "device", "config", "batch", "rep", "status", "median_ms",
-          "mean_ms", "first_step_ms", "memory_forward_mib", "memory_step_mib", "total_s",
-          "wall_s", "parameters", "val_loss", "returncode", "error", "steps", "warmup",
-          "train_samples", "example", "python", "torch", "cuda", "gpu", "cpu", "platform", "cse",
-          "kingdon"]
+          "mean_ms", "first_step_ms", "memory_forward_mib", "memory_step_mib", "memory_held_mib",
+          "peak_allocated_mib", "peak_reserved_mib", "total_s", "wall_s", "parameters", "val_loss",
+          "returncode", "error", "detail", "steps", "warmup", "train_samples", "example", "python",
+          "torch", "triton", "cuda", "driver", "gpu", "cpu", "platform", "cse", "kingdon", "rotorch"]
 
 SUMMARY = re.compile(r"first step ([\d.]+) ms, then ([\d.]+) ms/step \(mean ([\d.]+), "
                      r"total ([\d.]+) s\)")
-VAL_LOSS = re.compile(r"(\d+) parameters, val loss ([-\d.]+)")
-MEMORY = re.compile(r"memory ([\d.]+) MiB forward, ([\d.]+) MiB forward and backward")
+VAL_LOSS = re.compile(r"(\d+) parameters, val loss (\S+)")
+MEMORY = re.compile(r"memory ([\d.]+) MiB forward, ([\d.]+) MiB forward and backward, on top of ([\d.]+) MiB held")
+PEAK = re.compile(r"peak ([\d.]+) MiB allocated, ([\d.]+) MiB reserved")
+# The line a traceback ends on, which a compiler may follow with advice of its own.
+EXCEPTION = re.compile(r"^[A-Za-z_][\w.]*: .*$", re.M)
 # Failures worth telling apart in the csv: the first two are limits of the card, the third of
 # the toolchain, and an illegal access has been known to take the whole machine with it.
 FAILURES = [("out of memory", "out-of-memory"),
             ("illegal memory access", "illegal-memory-access"),
             ("CUDA error", "cuda-error"),
-            ("timed out after", "timeout"),
             # Inductor writes c++ for the cpu and needs a compiler for it. On windows that is
             # MSVC, which is only on the path inside a developer prompt. Triton carries the
             # cuda side, so this is a cpu-only failure.
@@ -107,10 +119,14 @@ FAILURES = [("out of memory", "out-of-memory"),
             ("InductorError", "compile-failed"),
             ("InternalTorchDynamoError", "dynamo-failed"),
             ("Could not import the", "reference-path"),
+            ("type tensor to numpy", "tensor-to-numpy"),
+            ("view size is not compatible", "non-contiguous-view"),
             ("ModuleNotFoundError", "import-error"),
             # A triton kernel that asks for more registers or shared memory than the card has.
             ("OutOfResources", "triton-resources"),
             ("PTXASError", "ptxas-failed")]
+# Failures after which the card may not be fit to run anything else until it has been looked at.
+DEVICE_LOST = ("illegal-memory-access", "cuda-error")
 
 
 def implementation(config):
@@ -164,11 +180,15 @@ def environment(python):
             "'cuda': torch.version.cuda or '',"
             "'gpu': torch.cuda.get_device_name(0) if torch.cuda.is_available() else '',"
             "'cpu': platform.processor(), 'platform': platform.platform(),"
-            "'kingdon': benchmark.revision()}))")
-    probe = subprocess.run([python, "-c", code], capture_output=True, text=True)
+            "'triton': next((f\"{d.metadata['Name']} {d.version}\" for d in importlib.metadata.distributions() if (d.metadata['Name'] or '').lower().startswith('triton')), ''),"
+            "'kingdon': benchmark.revision(), 'rotorch': benchmark.revision(os.path.dirname(rotorch.__file__))}))")
+    probe = subprocess.run([python, "-c", "import importlib.metadata, os, rotorch; " + code], capture_output=True, text=True)
     if probe.returncode:
         raise SystemExit(f"Could not import torch with {python}:\n{probe.stderr}")
-    return json.loads(probe.stdout)
+    environ = json.loads(probe.stdout)
+    smi = shutil.which("nvidia-smi")
+    environ["driver"] = subprocess.run([smi, "--query-gpu=driver_version", "--format=csv,noheader"], capture_output=True, text=True).stdout.split("\n")[0].strip() if smi and environ["gpu"] else ""
+    return environ
 
 
 def classify(output):
@@ -179,9 +199,53 @@ def classify(output):
     return "failed"
 
 
+def detail(output):
+    """The exception a run ended on or, where it ended without one, the last thing it printed, such as the phase it was in."""
+    lines = EXCEPTION.findall(output) or [line for line in output.splitlines() if line.strip()] or [""]
+    return lines[-1].strip()[:500]
+
+
+def execute(command, log, timeout, **popen):
+    """
+    Run `command`, its output written to the file `log` as it comes, so that nothing is lost however the run ends.
+    One that outlives `timeout` seconds is killed, and with it whatever it started, such as inductor's compile workers.
+    Returns the exit code, or None for a run that timed out.
+    """
+    with open(log, "w", encoding="utf-8") as handle:
+        handle.write(" ".join(command) + "\n\n")
+        handle.flush()
+        child = subprocess.Popen(command, stdout=handle, stderr=subprocess.STDOUT, start_new_session=True, **popen)
+        try:
+            return child.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return None
+        finally:
+            if child.poll() is None:
+                if os.name == "nt":
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(child.pid)], capture_output=True)
+                else:
+                    os.killpg(child.pid, signal.SIGKILL)
+                child.wait()
+
+
+@functools.cache
+def cpu_compile_failure(python, log):
+    """
+    Why inductor cannot compile for the cpu with `python`, or None if it can: from compiling and running a small function into a cache of its own, so that no binary built
+    before stands in for the toolchain.
+    """
+    code = "import torch; x = torch.randn(64); assert torch.allclose(torch.compile(lambda x: x.sin() + 1)(x), x.sin() + 1)"
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as cache:
+        returncode = execute([python, "-c", code], log, 600, env=dict(os.environ, CUDA_VISIBLE_DEVICES="-1", TORCHINDUCTOR_CACHE_DIR=cache))
+    if returncode is None:
+        return "timeout"
+    with open(log, encoding="utf-8", errors="replace") as handle:
+        return returncode and classify(handle.read()) or None
+
+
 def run(example, config, device, batch, rep, args, environ):
     """One process, one row. Never raises: a failure is a result too."""
-    command = [args.python, example, "--device", device, "--batch-size", str(batch),
+    command = [args.python, "-u", example, "--device", device, "--batch-size", str(batch),
                "--steps", str(args.steps), "--warmup", str(args.warmup),
                "--train-samples", str(max(args.train_samples, batch)),
                "--val-samples", str(args.val_samples), "--print-interval", str(args.steps),
@@ -190,19 +254,19 @@ def run(example, config, device, batch, rep, args, environ):
     if path := getattr(args, f"{implementation(config)}_path", None):
         command += [f"--{implementation(config)}-path", path]
 
+    log = log_path(args.output, config, device, batch, rep)
     start = time.perf_counter()
-    try:
-        done = subprocess.run(command, cwd=os.path.dirname(example) or ".", text=True,
-                              capture_output=True, timeout=args.timeout)
-        output, returncode = done.stdout + done.stderr, done.returncode
-    except subprocess.TimeoutExpired as expired:
-        output = (expired.stdout or b"").decode(errors="replace")
-        output, returncode = output + f"\ntimed out after {args.timeout} s\n", -1
+    returncode = execute(command, log, args.timeout, cwd=os.path.dirname(example) or ".")
     wall = time.perf_counter() - start
+    with open(log, encoding="utf-8", errors="replace") as handle:
+        output = handle.read()
+    if returncode is None:
+        with open(log, "a", encoding="utf-8") as handle:
+            handle.write(f"\ntimed out after {args.timeout} s\n")
 
     row = dict(timestamp=time.strftime("%Y-%m-%d %H:%M:%S"), host=socket.gethostname(),
                device=device, config=config, batch=batch, rep=rep, status="ok",
-               returncode=returncode,
+               returncode=-1 if returncode is None else returncode,
                error="", wall_s=round(wall, 1), steps=args.steps, warmup=args.warmup,
                train_samples=max(args.train_samples, batch),
                example=os.path.basename(example), cse=args.cse, **environ)
@@ -212,12 +276,15 @@ def run(example, config, device, batch, rep, args, environ):
     if match := VAL_LOSS.search(output):
         row.update(parameters=match[1], val_loss=match[2])
     if match := MEMORY.search(output):
-        row.update(memory_forward_mib=match[1], memory_step_mib=match[2])
-    if returncode or "median_ms" not in row:
-        row.update(status="failed", error=classify(output))
-        with open(log_path(args.output, config, device, batch, rep), "w",
-                  encoding="utf-8") as log:  # Keep the whole thing, for the post mortem.
-            log.write(" ".join(command) + "\n\n" + output)
+        row.update(memory_forward_mib=match[1], memory_step_mib=match[2], memory_held_mib=match[3])
+    if match := PEAK.search(output):
+        row.update(peak_allocated_mib=match[1], peak_reserved_mib=match[2])
+    if returncode is None:
+        row.update(status="failed", error="timeout", detail=detail(output))
+    elif returncode or "median_ms" not in row:
+        row.update(status="failed", error=classify(output), detail=detail(output))
+    elif not math.isfinite(float(row.get("val_loss", "nan"))):
+        row.update(status="failed", error="nonfinite")
     return row
 
 
@@ -263,9 +330,12 @@ def completed(path, example, cse, kingdon):
 def skip(config, device, example):
     """
     There is no cpu triton, nor cpu graphs: the flag is ignored and the run is a second run of
-    another column. And the reference columns of the other papers are not this example's to run.
+    another column. The examples in CPU_ONLY stay off the card. And the reference columns of the
+    other papers are not this example's to run.
     """
     if device == "cpu" and ("triton" in CONFIGS[config] or "graphs" in CONFIGS[config]):
+        return True
+    if device == "cuda" and example_name(example) in CPU_ONLY:
         return True
     return implementation(config) not in ("rotorch", reference(example))
 
@@ -277,7 +347,7 @@ def plan(args, has_cuda):
         batches = args.cpu_batches if device == "cpu" else args.cuda_batches
         configs = [c for c in CONFIGS if c in args.configs and not skip(c, device, args.example)]
         for stage in (FIRST, tuple(c for c in configs if c not in FIRST)):
-            for batch in batches:
+            for batch in sorted(set(batches)):
                 for config in [c for c in configs if c in stage]:
                     for rep in range(1, args.reps + 1):
                         yield config, device, batch, rep
@@ -352,7 +422,8 @@ def example_args(args, example):
     args = argparse.Namespace(**vars(args))
     args.example = os.path.abspath(example)
     args.output = output_path(args.output, example, args.cse)
-    largest = LARGEST.get(example_name(example), CUDA_BATCHES[-1])
+    largest = LARGEST.get(example_name(example), math.inf)
+    args.cpu_batches = args.cpu_batches or [b for b in CPU_BATCHES if b <= largest]
     args.cuda_batches = args.cuda_batches or [b for b in CUDA_BATCHES if b <= largest]
     if args.preset == "quick":
         args.configs = list(FIRST)
@@ -379,7 +450,7 @@ def main(argv=None):
                         help="default: cpu, and cuda if torch can see one")
     parser.add_argument("--configs", nargs="*", default=list(CONFIGS), choices=list(CONFIGS))
     parser.add_argument("--cpu-batches", nargs="*", type=int,
-                        default=[32, 128, 512, 2048])
+                        help=f"default: {' '.join(map(str, CPU_BATCHES))}, up to the example's own largest in LARGEST")
     parser.add_argument("--cuda-batches", nargs="*", type=int,
                         help=f"default: {' '.join(map(str, CUDA_BATCHES))}, up to the example's own largest in LARGEST")
     parser.add_argument("--reps", type=int, default=2,
@@ -418,31 +489,26 @@ def sweep(args, environ):
           f"{environ['gpu'] or 'no gpu'}, torch {environ['torch']}, "
           f"cuda {environ['cuda'] or 'none'}, python {environ['python']}")
     print(f"{len(runs)} runs to go, {len(done)} already in {args.output}")
-    if (os.name == "nt" and not shutil.which("cl")
-            and any(run[1] == "cpu" and run[0] not in FIRST for run in runs)):
-        print("warning: cl.exe is not on the path, so inductor cannot compile for the cpu and\n"
-              "         every compiled cpu run will fail. Start a x64 Native Tools Command\n"
-              "         Prompt for VS, or drop those runs with --configs cgenn rotorch.\n"
-              "         The cuda runs compile through triton and are unaffected.\n"
-              "         Finding cl is not enough on its own: inductor compiles with /openmp,\n"
-              "         so omp.h has to be on the include path as well, which a bare conda\n"
-              "         prompt does not arrange.")
     if args.dry_run:
         for config, device, batch, rep in runs:
             print(f"  {device:5s} {config:20s} batch {batch:5d} rep {rep}")
         return
 
     os.makedirs(os.path.dirname(args.output), exist_ok=True)
+    compiled = sorted({config for config, device, *_ in runs if device == "cpu" and "--compile" in CONFIGS[config]})
+    log = os.path.join(os.path.dirname(args.output), "cpu-compile.log")
+    if compiled and (reason := cpu_compile_failure(args.python, log)):
+        print(f"inductor cannot compile for the cpu here ({reason}, see {log}), so {', '.join(compiled)} are left out on the cpu")
+        runs = [run for run in runs if run[1] != "cpu" or run[0] not in compiled]
 
-    blocked = set()  # (config, device) that has already failed, at a smaller batch size.
+    failed = {}  # (config, device), or a device that may have been lost, -> the row of the run that failed there.
     for config, device, batch, rep in runs:
-        if (config, device) in blocked:
-            print(f"[{time.strftime('%H:%M:%S')}] {config} {device} b{batch}: skipped, "
-                  f"this configuration already failed at a smaller batch size")
+        if cause := failed.get((config, device)) or failed.get(device):
+            reason = f"{cause['config']} b{cause['batch']} rep {cause['rep']} failed: {cause['error']}"
+            print(f"[{time.strftime('%H:%M:%S')}] {config} {device} b{batch}: skipped, {reason}")
             write(args.output, dict(timestamp=time.strftime("%Y-%m-%d %H:%M:%S"),
                                     host=socket.gethostname(), device=device, config=config,
-                                    batch=batch, rep=rep, status="skipped",
-                                    error="failed at a smaller batch size",
+                                    batch=batch, rep=rep, status="skipped", error=reason,
                                     example=os.path.basename(args.example), cse=args.cse, **environ))
             continue
 
@@ -458,7 +524,9 @@ def sweep(args, environ):
         else:
             print(f"    {row['error']} after {row['wall_s']} s, see "
                   f"{log_path(args.output, config, device, batch, rep)}", flush=True)
-            blocked.add((config, device))
+            failed[(config, device)] = row
+            if row["error"] in DEVICE_LOST:
+                failed[device] = row
 
     if os.path.exists(args.output):
         summarize(args.output, args.example, args.cse, environ["kingdon"])
