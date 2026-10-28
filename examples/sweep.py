@@ -65,17 +65,20 @@ CONFIGS = {
     "gatr": ["--impl", "gatr"],
     "rotorch": [],
     "rotorch-triton": ["--backend", "triton"],
+    "rotorch-triton2": ["--backend", "triton2"],
     "cgenn-compiled": ["--impl", "cgenn", "--compile", "model"],
     "gatr-compiled": ["--impl", "gatr", "--compile", "model"],
     "rotorch-operators": ["--compile", "operators"],
     "rotorch-model": ["--compile", "model"],
     "rotorch-triton-model": ["--backend", "triton", "--compile", "model"],
+    "rotorch-triton2-model": ["--backend", "triton2", "--compile", "model"],
     "cgenn-graphs": ["--impl", "cgenn", "--compile", "graphs"],
     "rotorch-triton-graphs": ["--backend", "triton", "--compile", "graphs"],
+    "rotorch-triton2-graphs": ["--backend", "triton2", "--compile", "graphs"],
 }
 # Run these first. The eager ones cost nothing to start; triton pays a compile per kernel, which
 # is seconds against the minutes inductor wants for a whole model.
-FIRST = ("cgenn", "gatr", "rotorch", "rotorch-triton")
+FIRST = ("cgenn", "gatr", "rotorch", "rotorch-triton", "rotorch-triton2")
 
 # The reference every example is measured against, which is the one its own paper ships. An
 # example knows nothing of the others, so asking it for one of theirs is an error, not a row.
@@ -330,7 +333,7 @@ def skip(config, device, example):
     There is no cpu triton, nor cpu graphs: the flag is ignored and the run is a second run of
     another column. And the reference columns of the other papers are not this example's to run.
     """
-    if device == "cpu" and ("triton" in CONFIGS[config] or "graphs" in CONFIGS[config]):
+    if device == "cpu" and ("--backend" in CONFIGS[config] or "graphs" in CONFIGS[config]):
         return True
     return implementation(config) not in ("rotorch", reference(example))
 
@@ -363,18 +366,18 @@ def table(best, oom, device, metric, title, ratio, example):
         return
 
     print(f"\n{device}: {title}")
-    print("batch".rjust(7) + "".join(name.rjust(22) for name in configs))
+    print("batch".rjust(7) + "".join(name.rjust(24) for name in configs))
     for batch in batches:
         cells = []
         for config in configs:
             value = best.get((device, config, batch), {}).get(metric)
             baseline = best.get((device, against, batch), {}).get(metric)
             if value is None:
-                cells.append(("OOM" if (device, config, batch) in oom else "-").rjust(22))
+                cells.append(("OOM" if (device, config, batch) in oom else "-").rjust(24))
             elif baseline and config != against:
-                cells.append(f"{value:.1f} ({ratio(baseline, value):.2f}x)".rjust(22))
+                cells.append(f"{value:.1f} ({ratio(baseline, value):.2f}x)".rjust(24))
             else:
-                cells.append(f"{value:.1f}".rjust(22))
+                cells.append(f"{value:.1f}".rjust(24))
         print(str(batch).rjust(7) + "".join(cells))
 
 
@@ -486,7 +489,7 @@ def sweep(args, environ):
     print(f"{len(runs)} runs to go, {len(done)} already in {args.output}")
     if args.dry_run:
         for config, device, batch, rep in runs:
-            print(f"  {device:5s} {config:20s} batch {batch:5d} rep {rep}")
+            print(f"  {device:5s} {config:22s} batch {batch:5d} rep {rep}")
         return
 
     os.makedirs(os.path.dirname(args.output), exist_ok=True)

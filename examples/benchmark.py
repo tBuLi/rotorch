@@ -241,9 +241,8 @@ def run(task):
     parser.add_argument("--print-interval", type=int, default=32)
     parser.add_argument("--data-dir", default=None)
     parser.add_argument("--device", default="cpu")
-    parser.add_argument("--backend", choices=["torch", "triton"], default="torch",
-                        help="how kingdon emits its operators: as torch calls, or each as "
-                             "one triton kernel forward and one backward")
+    parser.add_argument("--backend", choices=["torch", "triton", "triton2"], default="torch",
+                        help="Kingdon operator emitter: torch, fused triton, or triton2 with tensor contractions")
     parser.add_argument("--cse", action=argparse.BooleanOptionalAction, default=True,
                         help="enable Kingdon common subexpression elimination (default: enabled)")
     parser.add_argument("--compile", choices=["none", "operators", "model", "graphs"], default="none",
@@ -259,6 +258,6 @@ def run(task):
     if args.impl != "rotorch" and (args.compile == "operators" or args.backend != "torch"):
         raise SystemExit("--backend and --compile operators are about the operators kingdon "
                          "generates, so rotorch only.")
-    if args.backend == "triton" and not args.device.startswith("cuda"):
-        raise SystemExit("--backend triton runs on a cuda --device only; --backend torch runs anywhere.")
+    if args.backend in ("triton", "triton2") and not args.device.startswith("cuda"):
+        raise SystemExit(f"--backend {args.backend} requires a cuda --device.")
     train(args, task)
